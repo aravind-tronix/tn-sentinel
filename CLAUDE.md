@@ -13,7 +13,10 @@ All commands use the project virtualenv. Run each process in a separate terminal
 # Scraper scheduler (initial pass + loop)
 ./venv/bin/python -m local_server.scraper.main
 
-# Queue worker (continuous)
+# Queue worker (daemon — runs forever, wakes on new items)
+./venv/bin/python -m local_server.pipeline.queue_worker --pause 0.5
+
+# Queue worker (one-shot — process N items then exit)
 ./venv/bin/python -m local_server.pipeline.queue_worker --limit 5 --pause 0.5
 ```
 

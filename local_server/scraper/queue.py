@@ -23,5 +23,15 @@ class RawArticleQueue:
             raw = raw.decode("utf-8")
         return json.loads(raw)
 
+    async def blpop(self, timeout: float = 5.0) -> dict | None:
+        """Blocking pop — waits up to `timeout` seconds for an item."""
+        result = await self.redis.blpop([self.queue_name], timeout=timeout)
+        if not result:
+            return None
+        _, raw = result
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return json.loads(raw)
+
     async def length(self) -> int:
         return await self.redis.llen(self.queue_name)
