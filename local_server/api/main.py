@@ -1,0 +1,254 @@
+import asyncio
+import json
+from datetime import datetime, timedelta
+from typing import Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import func, select, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from local_server.api.broadcaster import EventBroadcaster
+from local_server.api.schemas import (
+    ArticleRequest,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    CategoryStat,
+    DistrictStat,
+    EnrichResponse,
+    IncidentListResponse,
+    IncidentResponse,
+    KPIStats,
+)
+from local_server.config import get_settings
+from local_server.db.models import AsyncSessionLocal, Incident
+from local_server.pipeline.worker import process_and_save
+from local_server.pipeline.llm_chains import process_article as process_article_raw
+
+settings = get_settings()
+app = FastAPI(title="Tamil Nadu Crime Intelligence API")
+
+broadcaster = EventBroadcaster()
+
+# Allow CORS from any origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    from local_server.db.models import init_db
+
+    await init_db()
+
+
+def get_api_key(x_api_key: str = Header(...)) -> str:
+    if x_api_key != settings.llm_api_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return x_api_key
+
+
+async def get_db() -> AsyncSession:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "service": "tn-crime-intel"}
+
+
+@app.post("/enrich", response_model=EnrichResponse)
+async def enrich_article(
+    article: ArticleRequest,
+    api_key: str = Depends(get_api_key),
+) -> EnrichResponse:
+    incident, created = await process_and_save(article.dict())
+    if incident is None:
+        return EnrichResponse(status="filtered", incident=None, created=False, reason="not crime related")
+
+    enriched = IncidentResponse.from_orm(incident)
+    if created:
+        await broadcaster.publish({"type": "incident", "incident": enriched.dict()})
+
+    return EnrichResponse(status="ok", incident=enriched.dict(), created=created)
+
+
+@app.post("/broadcast")
+async def broadcast_event(event: dict, api_key: str = Depends(get_api_key)) -> dict:
+    await broadcaster.publish(event)
+    return {"status": "ok"}
+
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_text(
+    request: AnalyzeRequest,
+    api_key: str = Depends(get_api_key),
+) -> AnalyzeResponse:
+    incident_data = await process_article_raw(
+        {
+            "source_id": "adhoc",
+            "source_name": "adhoc",
+            "title": request.title or request.text[:100],
+            "text": request.text,
+            "summary": None,
+            "language": request.language or "en",
+            "url": request.url or "https://example.com/adhoc",
+            "published_at": None,
+            "scraped_at": None,
+            "image_url": None,
+            "tags": [],
+        }
+    )
+    if not incident_data:
+        return AnalyzeResponse(status="filtered", incident=None)
+    return AnalyzeResponse(status="ok", incident=incident_data)
+
+
+@app.get("/incidents", response_model=IncidentListResponse)
+async def list_incidents(
+    district: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    source_id: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> IncidentListResponse:
+    stmt = select(Incident)
+    if district:
+        stmt = stmt.where(func.lower(Incident.district) == district.lower())
+    if category:
+        stmt = stmt.where(func.lower(Incident.category) == category.lower())
+    if source_id:
+        stmt = stmt.where(func.lower(Incident.source_id) == source_id.lower())
+    if q:
+        ilike_value = f"%{q}%"
+        stmt = stmt.where(
+            Incident.title.ilike(ilike_value)
+            | Incident.summary.ilike(ilike_value)
+            | Incident.raw_text.ilike(ilike_value)
+        )
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date)
+            stmt = stmt.where(Incident.published_at >= from_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid from_date format")
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date)
+            stmt = stmt.where(Incident.published_at <= to_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid to_date format")
+
+    stmt = stmt.order_by(Incident.published_at.desc().nullslast()).limit(limit)
+    rows = await db.execute(stmt)
+    incidents = [IncidentResponse.from_orm(row) for row in rows.scalars().all()]
+    return IncidentListResponse(incidents=incidents)
+
+
+@app.get("/incidents/{incident_id}", response_model=IncidentResponse)
+async def get_incident(incident_id: int, db: AsyncSession = Depends(get_db)) -> IncidentResponse:
+    stmt = select(Incident).where(Incident.id == incident_id)
+    row = await db.execute(stmt)
+    incident = row.scalars().first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return IncidentResponse.from_orm(incident)
+
+
+@app.get("/stats/kpis", response_model=KPIStats)
+async def get_kpis(db: AsyncSession = Depends(get_db)) -> KPIStats:
+    window = datetime.utcnow() - timedelta(hours=24)
+    events_24h_stmt = select(func.count()).where(Incident.published_at >= window)
+    avg_score_stmt = select(func.coalesce(func.avg(Incident.viral_score), 0.0)).where(Incident.published_at >= window)
+    active_sources_stmt = select(func.count(func.distinct(Incident.source_id))).where(Incident.published_at >= window)
+    high_priority_stmt = select(func.count()).where(Incident.published_at >= window).where(Incident.viral_score >= 80)
+    alerts_stmt = select(func.count()).where(Incident.published_at >= window).where(Incident.viral_score >= 90)
+
+    events_24h = (await db.execute(events_24h_stmt)).scalar_one()
+    avg_viral_score = float((await db.execute(avg_score_stmt)).scalar_one() or 0.0)
+    active_sources = (await db.execute(active_sources_stmt)).scalar_one()
+    high_priority_incidents = (await db.execute(high_priority_stmt)).scalar_one()
+    alerts = (await db.execute(alerts_stmt)).scalar_one()
+
+    return KPIStats(
+        events_24h=int(events_24h),
+        avg_viral_score=round(avg_viral_score, 2),
+        active_sources=int(active_sources),
+        high_priority_incidents=int(high_priority_incidents),
+        alerts=int(alerts),
+    )
+
+
+@app.get("/stats/districts", response_model=list[DistrictStat])
+async def get_district_stats(db: AsyncSession = Depends(get_db)) -> list[DistrictStat]:
+    stmt = (
+        select(Incident.district, func.count().label("count"))
+        .group_by(Incident.district)
+        .order_by(desc("count"))
+        .limit(40)
+    )
+    rows = await db.execute(stmt)
+    counts = rows.all()
+
+    category_stmt = (
+        select(Incident.district, Incident.category, func.count().label("count"))
+        .group_by(Incident.district, Incident.category)
+        .order_by(Incident.district, desc("count"))
+    )
+    category_rows = await db.execute(category_stmt)
+
+    top_category: dict[Optional[str], str] = {}
+    for district, category, count in category_rows:
+        if district not in top_category:
+            top_category[district] = category
+
+    return [
+        DistrictStat(district=district, count=int(count), top_category=top_category.get(district))
+        for district, count in counts
+    ]
+
+
+@app.get("/stats/categories", response_model=list[CategoryStat])
+async def get_category_stats(db: AsyncSession = Depends(get_db)) -> list[CategoryStat]:
+    stmt = (
+        select(Incident.category, func.count().label("count"))
+        .group_by(Incident.category)
+        .order_by(desc("count"))
+    )
+    rows = await db.execute(stmt)
+    return [CategoryStat(category=category, count=int(count)) for category, count in rows.all()]
+
+
+@app.get("/stream")
+async def stream_events(request: Request) -> StreamingResponse:
+    queue = await broadcaster.subscribe()
+
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                event = await queue.get()
+                payload = json.dumps(event, default=str)
+                yield f"event: incident\ndata: {payload}\n\n"
+        finally:
+            broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

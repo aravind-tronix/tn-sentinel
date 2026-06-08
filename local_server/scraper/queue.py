@@ -1,0 +1,27 @@
+import json
+from datetime import datetime
+
+import redis.asyncio as redis
+from local_server.config import get_settings
+
+settings = get_settings()
+
+class RawArticleQueue:
+    def __init__(self):
+        self.redis = redis.from_url(settings.redis_url)
+        self.queue_name = settings.redis_raw_queue
+
+    async def push(self, article: dict) -> None:
+        article["queued_at"] = article.get("queued_at") or datetime.utcnow().isoformat()
+        await self.redis.rpush(self.queue_name, json.dumps(article, ensure_ascii=False))
+
+    async def pop(self) -> dict | None:
+        raw = await self.redis.lpop(self.queue_name)
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return json.loads(raw)
+
+    async def length(self) -> int:
+        return await self.redis.llen(self.queue_name)
