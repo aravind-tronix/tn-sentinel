@@ -31,13 +31,12 @@ app = FastAPI(title="Tamil Nadu Crime Intelligence API")
 
 broadcaster = EventBroadcaster()
 
-# Allow CORS from any origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_allowed_origins.split(","),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["content-type", "x-api-key"],
 )
 
 

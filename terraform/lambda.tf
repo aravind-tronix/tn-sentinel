@@ -22,6 +22,7 @@ resource "aws_lambda_function" "api" {
       WS_ENDPOINT          = "${aws_apigatewayv2_api.websocket.api_endpoint}/${var.environment}"
       AWS_REGION_NAME      = var.aws_region
       ENVIRONMENT          = var.environment
+      ALLOWED_ORIGINS      = "https://main.${var.ui_domain}"
     }
   }
 

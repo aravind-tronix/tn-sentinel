@@ -4,19 +4,13 @@ from typing import Optional
 
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from dynamo import incidents_table, item_to_response
 
+# CORS is handled entirely by API Gateway HTTP API cors_configuration in Terraform.
+# Do not add CORSMiddleware here — it would double-set headers and leak "*".
 app = FastAPI(title="TN Sentinel API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["content-type", "x-api-key"],
-)
 
 
 @app.get("/health")

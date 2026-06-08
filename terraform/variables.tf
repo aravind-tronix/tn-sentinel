@@ -18,3 +18,8 @@ variable "github_token" {
   type        = string
   sensitive   = true
 }
+
+variable "ui_domain" {
+  description = "Amplify app default domain (breaks circular dep between API GW and Amplify)"
+  default     = "d2l0lone63w0d6.amplifyapp.com"
+}
