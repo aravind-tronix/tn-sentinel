@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 import redis.asyncio as redis
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from local_server.config import get_settings
 
 settings = get_settings()
@@ -9,9 +10,9 @@ settings = get_settings()
 class RawArticleQueue:
     def __init__(self):
         self.redis = redis.from_url(settings.redis_url)
-        # Blocking commands need socket_timeout=0 (no timeout) so the client
-        # doesn't raise TimeoutError while waiting for BLPOP to return.
-        self._blocking_redis = redis.from_url(settings.redis_url, socket_timeout=0)
+        # socket_timeout=None disables the client-side read deadline so BLPOP
+        # can block for its full server-side timeout without the client raising.
+        self._blocking_redis = redis.from_url(settings.redis_url, socket_timeout=None)
         self.queue_name = settings.redis_raw_queue
 
     async def push(self, article: dict) -> None:
@@ -28,7 +29,10 @@ class RawArticleQueue:
 
     async def blpop(self, timeout: float = 5.0) -> dict | None:
         """Blocking pop — waits up to `timeout` seconds for an item."""
-        result = await self._blocking_redis.blpop([self.queue_name], timeout=timeout)
+        try:
+            result = await self._blocking_redis.blpop([self.queue_name], timeout=timeout)
+        except (RedisTimeoutError, TimeoutError):
+            return None
         if not result:
             return None
         _, raw = result
