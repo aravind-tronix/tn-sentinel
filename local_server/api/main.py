@@ -121,7 +121,8 @@ async def list_incidents(
     q: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> IncidentListResponse:
     stmt = select(Incident)
@@ -151,7 +152,7 @@ async def list_incidents(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid to_date format")
 
-    stmt = stmt.order_by(Incident.published_at.desc().nullslast()).limit(limit)
+    stmt = stmt.order_by(Incident.published_at.desc().nullslast()).offset(offset).limit(limit)
     rows = await db.execute(stmt)
     incidents = [IncidentResponse.from_orm(row) for row in rows.scalars().all()]
     return IncidentListResponse(incidents=incidents)
