@@ -9,6 +9,9 @@ settings = get_settings()
 class RawArticleQueue:
     def __init__(self):
         self.redis = redis.from_url(settings.redis_url)
+        # Blocking commands need socket_timeout=0 (no timeout) so the client
+        # doesn't raise TimeoutError while waiting for BLPOP to return.
+        self._blocking_redis = redis.from_url(settings.redis_url, socket_timeout=0)
         self.queue_name = settings.redis_raw_queue
 
     async def push(self, article: dict) -> None:
@@ -25,7 +28,7 @@ class RawArticleQueue:
 
     async def blpop(self, timeout: float = 5.0) -> dict | None:
         """Blocking pop — waits up to `timeout` seconds for an item."""
-        result = await self.redis.blpop([self.queue_name], timeout=timeout)
+        result = await self._blocking_redis.blpop([self.queue_name], timeout=timeout)
         if not result:
             return None
         _, raw = result
