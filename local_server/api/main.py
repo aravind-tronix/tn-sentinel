@@ -125,37 +125,44 @@ async def list_incidents(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> IncidentListResponse:
-    stmt = select(Incident)
+    filters = []
     if district:
-        stmt = stmt.where(func.lower(Incident.district) == district.lower())
+        filters.append(func.lower(Incident.district) == district.lower())
     if category:
-        stmt = stmt.where(func.lower(Incident.category) == category.lower())
+        filters.append(func.lower(Incident.category) == category.lower())
     if source_id:
-        stmt = stmt.where(func.lower(Incident.source_id) == source_id.lower())
+        filters.append(func.lower(Incident.source_id) == source_id.lower())
     if q:
         ilike_value = f"%{q}%"
-        stmt = stmt.where(
+        filters.append(
             Incident.title.ilike(ilike_value)
             | Incident.summary.ilike(ilike_value)
             | Incident.raw_text.ilike(ilike_value)
         )
     if from_date:
         try:
-            from_dt = datetime.fromisoformat(from_date)
-            stmt = stmt.where(Incident.published_at >= from_dt)
+            filters.append(Incident.published_at >= datetime.fromisoformat(from_date))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid from_date format")
     if to_date:
         try:
-            to_dt = datetime.fromisoformat(to_date)
-            stmt = stmt.where(Incident.published_at <= to_dt)
+            filters.append(Incident.published_at <= datetime.fromisoformat(to_date))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid to_date format")
 
-    stmt = stmt.order_by(Incident.published_at.desc().nullslast()).offset(offset).limit(limit)
-    rows = await db.execute(stmt)
+    count_stmt = select(func.count()).select_from(Incident)
+    data_stmt = select(Incident)
+    for f in filters:
+        count_stmt = count_stmt.where(f)
+        data_stmt = data_stmt.where(f)
+
+    total_result, rows = await asyncio.gather(
+        db.execute(count_stmt),
+        db.execute(data_stmt.order_by(Incident.published_at.desc().nullslast()).offset(offset).limit(limit)),
+    )
+    total = total_result.scalar() or 0
     incidents = [IncidentResponse.from_orm(row) for row in rows.scalars().all()]
-    return IncidentListResponse(incidents=incidents)
+    return IncidentListResponse(incidents=incidents, total=total)
 
 
 @app.get("/incidents/{incident_id}", response_model=IncidentResponse)

@@ -48,6 +48,7 @@ class IncidentResponse(BaseModel):
 
 class IncidentListResponse(BaseModel):
     incidents: List[IncidentResponse]
+    total: int = 0
 
 class KPIStats(BaseModel):
     events_24h: int
