@@ -127,13 +127,15 @@ class RSSExtractor(BaseExtractor):
             pass
         return url
 
-    def _resolve_entry_url(self, entry, url: str) -> str:
-        source = entry.get("source")
-        if isinstance(source, dict):
-            source_url = source.get("href") or source.get("url")
-            if source_url:
-                return source_url
-        return url
+    def _is_article_url(self, url: str) -> bool:
+        """Return False for bare domain roots that are clearly not article URLs."""
+        from urllib.parse import urlparse
+        try:
+            p = urlparse(url)
+            path = p.path.rstrip("/")
+            return bool(path) and path != ""
+        except Exception:
+            return True
 
     def _is_polluted_text(self, text: str) -> bool:
         if not text:
@@ -175,8 +177,9 @@ class RSSExtractor(BaseExtractor):
         sem = asyncio.Semaphore(5)
 
         async def fetch_one(entry, url, clean_summary):
-            resolved_url = self._resolve_entry_url(entry, url)
-            full_url = await self._resolve_redirect(resolved_url)
+            full_url = await self._resolve_redirect(url)
+            if not full_url or not self._is_article_url(full_url):
+                return entry, url, None, None
             full_text = await self._fetch_full_text(full_url) if full_url else None
             if self._is_polluted_text(full_text):
                 full_text = None
@@ -191,6 +194,8 @@ class RSSExtractor(BaseExtractor):
         results = await asyncio.gather(*[fetch_limited(entry, url, clean_summary) for entry, url, clean_summary in entries])
 
         for entry, url, text, summary in results:
+            if text is None and summary is None:
+                continue
             article = RawArticle(
                 source_id=self.source["id"],
                 source_name=self.source["name"],
