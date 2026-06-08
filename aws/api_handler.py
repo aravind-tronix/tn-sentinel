@@ -18,6 +18,20 @@ async def health():
     return {"status": "ok", "service": "tn-sentinel"}
 
 
+def _exhaust(table, op: str, kwargs: dict) -> list[dict]:
+    """Paginate through DynamoDB query/scan until all matching items are returned."""
+    fn = table.query if op == "query" else table.scan
+    items = []
+    while True:
+        resp = fn(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs = {**kwargs, "ExclusiveStartKey": lek}
+    return items
+
+
 @app.get("/incidents")
 async def list_incidents(
     district: Optional[str] = Query(None),
@@ -25,13 +39,12 @@ async def list_incidents(
     source_id: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
     table = incidents_table()
-    items = []
 
     if district and category:
-        # GSI2: district-category-time-index; SK = cat_time = "{Category}#{published_at}"
         cat = category.title()
         if from_date or to_date:
             sk_from = f"{cat}#{from_date or '0000'}"
@@ -39,63 +52,59 @@ async def list_incidents(
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").begins_with(f"{cat}#")
-        resp = table.query(
-            IndexName="district-category-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-        )
-        items = resp.get("Items", [])
+        all_items = _exhaust(table, "query", {
+            "IndexName": "district-category-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif district:
-        # Main table: PK = district, SK = published_at_id
         if from_date or to_date:
             sk_from = from_date or "0000"
-            sk_to = (to_date or "9999") + "~"  # ~ is after all digits in ASCII
+            sk_to = (to_date or "9999") + "~"
             key_cond = Key("district").eq(district.lower()) & Key("published_at_id").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower())
-        resp = table.query(KeyConditionExpression=key_cond, ScanIndexForward=False, Limit=limit)
-        items = resp.get("Items", [])
+        all_items = _exhaust(table, "query", {
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif category:
-        # GSI1: category-time-index
         key_cond = Key("category").eq(category.title())
         if from_date or to_date:
             key_cond = key_cond & Key("published_at").between(from_date or "0000", to_date or "9999")
-        resp = table.query(
-            IndexName="category-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-        )
-        items = resp.get("Items", [])
+        all_items = _exhaust(table, "query", {
+            "IndexName": "category-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif source_id:
-        # GSI3: source-time-index
         key_cond = Key("source_id").eq(source_id)
         if from_date or to_date:
             key_cond = key_cond & Key("published_at").between(from_date or "0000", to_date or "9999")
-        resp = table.query(
-            IndexName="source-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-        )
-        items = resp.get("Items", [])
+        all_items = _exhaust(table, "query", {
+            "IndexName": "source-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     else:
-        scan_kwargs: dict = {"Limit": limit}
+        scan_kwargs: dict = {}
         if from_date and to_date:
             scan_kwargs["FilterExpression"] = Attr("published_at").between(from_date, to_date)
         elif from_date:
             scan_kwargs["FilterExpression"] = Attr("published_at").gte(from_date)
         elif to_date:
             scan_kwargs["FilterExpression"] = Attr("published_at").lte(to_date)
-        resp = table.scan(**scan_kwargs)
-        items = resp.get("Items", [])
+        all_items = _exhaust(table, "scan", scan_kwargs)
 
-    return {"incidents": [item_to_response(i) for i in items]}
+    # Sort descending by published_at for consistent ordering
+    all_items.sort(key=lambda x: x.get("published_at", ""), reverse=True)
+    total = len(all_items)
+    page_items = all_items[offset: offset + limit]
+    return {"incidents": [item_to_response(i) for i in page_items], "total": total}
 
 
 @app.get("/incidents/{incident_id}")
