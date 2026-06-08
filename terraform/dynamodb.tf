@@ -38,7 +38,7 @@ resource "aws_dynamodb_table" "incidents" {
   }
 
   attribute {
-    name = "url"
+    name = "id"
     type = "S"
   }
 
@@ -66,10 +66,10 @@ resource "aws_dynamodb_table" "incidents" {
     projection_type = "ALL"
   }
 
-  # Exact URL lookup for dedup
+  # Exact ID lookup for GET /incidents/{id}
   global_secondary_index {
-    name            = "url-index"
-    hash_key        = "url"
+    name            = "id-index"
+    hash_key        = "id"
     projection_type = "ALL"
   }
 

@@ -98,11 +98,11 @@ async def list_incidents(
     return {"incidents": [item_to_response(i) for i in items]}
 
 
-@app.get("/incidents/{incident_url:path}")
-async def get_incident(incident_url: str):
+@app.get("/incidents/{incident_id}")
+async def get_incident(incident_id: int):
     resp = incidents_table().query(
-        IndexName="url-index",
-        KeyConditionExpression=Key("url").eq(incident_url),
+        IndexName="id-index",
+        KeyConditionExpression=Key("id").eq(str(incident_id)),
         Limit=1,
     )
     items = resp.get("Items", [])
