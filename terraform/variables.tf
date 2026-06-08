@@ -12,3 +12,9 @@ variable "environment" {
   description = "Deployment environment"
   default     = "prod"
 }
+
+variable "github_token" {
+  description = "GitHub personal access token for Amplify → repo connection"
+  type        = string
+  sensitive   = true
+}
