@@ -9,6 +9,7 @@ from sqlalchemy import select
 from local_server.config import get_settings
 from local_server.db.models import AsyncSessionLocal, Incident, init_db
 from local_server.pipeline.llm_chains import process_article
+from local_server.aws.dynamo import save_incident_to_dynamo, broadcast_to_ws
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -88,7 +89,10 @@ async def process_and_save(raw_article: dict) -> tuple[Optional[Incident], bool]
     )
 
     if created:
-        await publish_event({"type": "incident", "incident": incident_data})
+        await save_incident_to_dynamo(incident)
+        event = {"type": "incident", "incident": incident_data}
+        await publish_event(event)          # local SSE (dev)
+        await broadcast_to_ws(event)        # API GW WebSocket (prod)
     return incident, created
 
 async def process_batch(raw_articles: list[dict]) -> list[Incident]:

@@ -1,7 +1,7 @@
-data "archive_file" "placeholder" {
-  type        = "zip"
-  source_file = "${path.module}/lambda_src/placeholder.py"
-  output_path = "${path.module}/.build/placeholder.zip"
+locals {
+  # Built by aws/build.sh — contains handler files + fastapi/mangum/boto3
+  lambda_zip  = "${path.module}/.build/lambda.zip"
+  lambda_hash = filebase64sha256("${path.module}/.build/lambda.zip")
 }
 
 # ── API Lambda (FastAPI + Mangum) ──────────────────────────────────────────
@@ -9,9 +9,9 @@ resource "aws_lambda_function" "api" {
   function_name    = "${var.project}-api-${var.environment}"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
-  handler          = "placeholder.handler"
-  filename         = data.archive_file.placeholder.output_path
-  source_code_hash = data.archive_file.placeholder.output_base64sha256
+  handler          = "api_handler.lambda_handler"
+  filename         = local.lambda_zip
+  source_code_hash = local.lambda_hash
   memory_size      = 256
   timeout          = 29 # API GW HTTP API hard limit
 
@@ -35,9 +35,9 @@ resource "aws_lambda_function" "websocket" {
   function_name    = "${var.project}-websocket-${var.environment}"
   role             = aws_iam_role.lambda_exec.arn
   runtime          = "python3.12"
-  handler          = "placeholder.handler"
-  filename         = data.archive_file.placeholder.output_path
-  source_code_hash = data.archive_file.placeholder.output_base64sha256
+  handler          = "ws_handler.handler"
+  filename         = local.lambda_zip
+  source_code_hash = local.lambda_hash
   memory_size      = 128
   timeout          = 10
 

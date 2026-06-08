@@ -1,6 +1,6 @@
 output "http_api_url" {
-  description = "REST API base URL (use as LAMBDA_API_URL in local worker)"
-  value       = aws_apigatewayv2_stage.http.invoke_url
+  description = "REST API base URL — $default stage, no /prod prefix"
+  value       = aws_apigatewayv2_api.http.api_endpoint
 }
 
 output "websocket_url" {

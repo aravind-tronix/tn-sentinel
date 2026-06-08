@@ -26,7 +26,7 @@ resource "aws_apigatewayv2_route" "proxy" {
 
 resource "aws_apigatewayv2_stage" "http" {
   api_id      = aws_apigatewayv2_api.http.id
-  name        = var.environment
+  name        = "$default"  # no stage prefix in URL — Mangum receives clean paths
   auto_deploy = true
 }
 

@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     pipeline_dedup_threshold: float = 0.88
     pipeline_max_text_length: int = 2000
 
+    # AWS / DynamoDB — leave blank to disable cloud writes
+    aws_region: str = "ap-south-1"
+    dynamodb_incidents_table: str = ""
+    dynamodb_ws_connections_table: str = ""
+    aws_ws_endpoint: str = ""  # https://xxx.execute-api.region.amazonaws.com/prod
+
     model_config = {
         "env_file": str(ENV_FILE),
         "env_file_encoding": "utf-8",
