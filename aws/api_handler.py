@@ -166,7 +166,7 @@ async def get_district_stats():
     cat_counts: dict = {}
     for item in items:
         d = item.get("district", "unknown")
-        c = item.get("category", "Unknown")
+        c = _norm_cat(item.get("category"))
         counts[d] = counts.get(d, 0) + 1
         cat_counts.setdefault(d, {})[c] = cat_counts.get(d, {}).get(c, 0) + 1
 
@@ -176,6 +176,12 @@ async def get_district_stats():
     ]
 
 
+def _norm_cat(raw: str | None) -> str:
+    if not raw:
+        return "Unknown"
+    return raw.title() if raw.islower() else raw
+
+
 @app.get("/stats/categories")
 async def get_category_stats():
     resp = incidents_table().scan(ProjectionExpression="category")
@@ -183,10 +189,91 @@ async def get_category_stats():
 
     counts: dict = {}
     for item in items:
-        c = item.get("category", "Unknown")
+        c = _norm_cat(item.get("category"))
         counts[c] = counts.get(c, 0) + 1
 
     return [{"category": c, "count": n} for c, n in sorted(counts.items(), key=lambda x: -x[1])]
+
+
+@app.get("/stats/timeline")
+async def get_timeline(days: int = Query(30, ge=7, le=90), breakdown: bool = Query(False)):
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    proj = "published_at, category" if breakdown else "published_at"
+    items = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("published_at").gte(since),
+        "ProjectionExpression": proj,
+    })
+
+    if breakdown:
+        counts: dict = {}
+        for item in items:
+            pub = item.get("published_at", "")
+            raw_cat = item.get("category") or "Other"
+            cat = raw_cat.title() if raw_cat.islower() else raw_cat
+            if pub:
+                key = (pub[:10], cat)
+                counts[key] = counts.get(key, 0) + 1
+        return [{"date": d, "category": c, "count": n} for (d, c), n in sorted(counts.items())]
+
+    counts2: dict = {}
+    for item in items:
+        pub = item.get("published_at", "")
+        if pub:
+            counts2[pub[:10]] = counts2.get(pub[:10], 0) + 1
+    return [{"date": d, "count": n} for d, n in sorted(counts2.items())]
+
+
+@app.get("/stats/sentiment")
+async def get_sentiment_stats():
+    items = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("sentiment").exists(),
+        "ProjectionExpression": "sentiment",
+    })
+
+    counts: dict = {}
+    for item in items:
+        s = item.get("sentiment")
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+
+    return [{"sentiment": s, "count": n} for s, n in sorted(counts.items(), key=lambda x: -x[1])]
+
+
+@app.get("/stats/sources")
+async def get_source_stats():
+    items = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("source_name").exists(),
+        "ProjectionExpression": "source_name",
+    })
+
+    counts: dict = {}
+    for item in items:
+        src = item.get("source_name")
+        if src:
+            counts[src] = counts.get(src, 0) + 1
+
+    return [
+        {"source_name": s, "count": n}
+        for s, n in sorted(counts.items(), key=lambda x: -x[1])[:10]
+    ]
+
+
+@app.get("/stats/viral-distribution")
+async def get_viral_distribution():
+    items = _exhaust(incidents_table(), "scan", {
+        "ProjectionExpression": "viral_score",
+    })
+
+    buckets = [(0, 20, "Low"), (20, 40, "Moderate"), (40, 60, "High"), (60, 80, "Critical"), (80, 101, "Viral")]
+    counts = {label: 0 for _, _, label in buckets}
+    for item in items:
+        score = int(item.get("viral_score", 0))
+        for lo, hi, label in buckets:
+            if lo <= score < hi:
+                counts[label] += 1
+                break
+
+    return [{"bucket": label, "lo": lo, "count": counts[label]} for lo, _, label in buckets]
 
 
 lambda_handler = Mangum(app, lifespan="off")

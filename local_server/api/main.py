@@ -256,6 +256,85 @@ async def get_category_stats(db: AsyncSession = Depends(get_db)) -> list[Categor
     return [CategoryStat(category=category, count=int(count)) for category, count in rows.all()]
 
 
+@app.get("/stats/timeline")
+async def get_timeline(
+    days: int = Query(30, ge=7, le=90),
+    breakdown: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    since = datetime.utcnow() - timedelta(days=days)
+    if breakdown:
+        stmt = (
+            select(
+                func.date_trunc("day", Incident.published_at).label("day"),
+                Incident.category,
+                func.count().label("count"),
+            )
+            .where(Incident.published_at >= since)
+            .group_by(func.date_trunc("day", Incident.published_at), Incident.category)
+            .order_by(func.date_trunc("day", Incident.published_at))
+        )
+        rows = await db.execute(stmt)
+        return [
+            {"date": row.day.strftime("%Y-%m-%d"), "category": row.category or "Other", "count": int(row.count)}
+            for row in rows.all()
+            if row.day is not None
+        ]
+    stmt = (
+        select(
+            func.date_trunc("day", Incident.published_at).label("day"),
+            func.count().label("count"),
+        )
+        .where(Incident.published_at >= since)
+        .group_by(func.date_trunc("day", Incident.published_at))
+        .order_by(func.date_trunc("day", Incident.published_at))
+    )
+    rows = await db.execute(stmt)
+    return [
+        {"date": row.day.strftime("%Y-%m-%d"), "count": int(row.count)}
+        for row in rows.all()
+        if row.day is not None
+    ]
+
+
+@app.get("/stats/sentiment")
+async def get_sentiment_stats(db: AsyncSession = Depends(get_db)):
+    stmt = (
+        select(Incident.sentiment, func.count().label("count"))
+        .where(Incident.sentiment.isnot(None))
+        .group_by(Incident.sentiment)
+        .order_by(desc("count"))
+    )
+    rows = await db.execute(stmt)
+    return [{"sentiment": row.sentiment, "count": int(row.count)} for row in rows.all()]
+
+
+@app.get("/stats/sources")
+async def get_source_stats(db: AsyncSession = Depends(get_db)):
+    stmt = (
+        select(Incident.source_name, func.count().label("count"))
+        .where(Incident.source_name.isnot(None))
+        .group_by(Incident.source_name)
+        .order_by(desc("count"))
+        .limit(10)
+    )
+    rows = await db.execute(stmt)
+    return [{"source_name": row.source_name, "count": int(row.count)} for row in rows.all()]
+
+
+@app.get("/stats/viral-distribution")
+async def get_viral_distribution(db: AsyncSession = Depends(get_db)):
+    buckets = [(0, 20, "Low"), (20, 40, "Moderate"), (40, 60, "High"), (60, 80, "Critical"), (80, 101, "Viral")]
+    results = await asyncio.gather(*[
+        db.execute(select(func.count()).where(Incident.viral_score >= lo, Incident.viral_score < hi))
+        for lo, hi, _ in buckets
+    ])
+    return [
+        {"bucket": label, "lo": lo, "count": int(r.scalar_one())}
+        for (lo, hi, label), r in zip(buckets, results)
+    ]
+
+
 @app.get("/stream")
 async def stream_events(request: Request) -> StreamingResponse:
     queue = await broadcaster.subscribe()
