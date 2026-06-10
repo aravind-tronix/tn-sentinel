@@ -56,6 +56,8 @@ class KPIStats(BaseModel):
     active_sources: int
     high_priority_incidents: int
     alerts: int
+    events_24h_delta: Optional[float] = None
+    avg_viral_score_delta: Optional[float] = None
 
 class DistrictStat(BaseModel):
     district: Optional[str]

@@ -122,20 +122,38 @@ async def get_incident(incident_id: int):
 
 @app.get("/stats/kpis")
 async def get_kpis():
-    window = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-    resp = incidents_table().scan(
-        FilterExpression=Attr("published_at").gte(window),
-        ProjectionExpression="viral_score, source_id",
-    )
-    items = resp.get("Items", [])
+    now = datetime.utcnow()
+    window_cur  = (now - timedelta(hours=24)).isoformat()
+    window_prev = (now - timedelta(hours=48)).isoformat()
 
-    scores = [int(i.get("viral_score", 0)) for i in items]
+    cur_resp  = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("published_at").gte(window_cur),
+        "ProjectionExpression": "viral_score, source_id",
+    })
+    prev_resp = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("published_at").between(window_prev, window_cur),
+        "ProjectionExpression": "viral_score",
+    })
+
+    scores_cur  = [int(i.get("viral_score", 0)) for i in cur_resp]
+    scores_prev = [int(i.get("viral_score", 0)) for i in prev_resp]
+
+    avg_cur  = sum(scores_cur)  / len(scores_cur)  if scores_cur  else 0.0
+    avg_prev = sum(scores_prev) / len(scores_prev) if scores_prev else 0.0
+    cnt_cur  = len(cur_resp)
+    cnt_prev = len(prev_resp)
+
+    events_delta    = round((cnt_cur - cnt_prev) / cnt_prev * 100, 1) if cnt_prev else None
+    avg_score_delta = round(avg_cur - avg_prev, 1) if avg_prev else None
+
     return {
-        "events_24h": len(items),
-        "avg_viral_score": round(sum(scores) / len(scores), 2) if scores else 0.0,
-        "active_sources": len({i.get("source_id") for i in items if i.get("source_id")}),
-        "high_priority_incidents": sum(1 for s in scores if s >= 80),
-        "alerts": sum(1 for s in scores if s >= 90),
+        "events_24h": cnt_cur,
+        "avg_viral_score": round(avg_cur, 2),
+        "active_sources": len({i.get("source_id") for i in cur_resp if i.get("source_id")}),
+        "high_priority_incidents": sum(1 for s in scores_cur if s >= 80),
+        "alerts": sum(1 for s in scores_cur if s >= 90),
+        "events_24h_delta": events_delta,
+        "avg_viral_score_delta": avg_score_delta,
     }
 
 

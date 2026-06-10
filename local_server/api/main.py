@@ -177,25 +177,42 @@ async def get_incident(incident_id: int, db: AsyncSession = Depends(get_db)) -> 
 
 @app.get("/stats/kpis", response_model=KPIStats)
 async def get_kpis(db: AsyncSession = Depends(get_db)) -> KPIStats:
-    window = datetime.utcnow() - timedelta(hours=24)
-    events_24h_stmt = select(func.count()).where(Incident.published_at >= window)
-    avg_score_stmt = select(func.coalesce(func.avg(Incident.viral_score), 0.0)).where(Incident.published_at >= window)
-    active_sources_stmt = select(func.count(func.distinct(Incident.source_id))).where(Incident.published_at >= window)
-    high_priority_stmt = select(func.count()).where(Incident.published_at >= window).where(Incident.viral_score >= 80)
-    alerts_stmt = select(func.count()).where(Incident.published_at >= window).where(Incident.viral_score >= 90)
+    now = datetime.utcnow()
+    window_cur  = now - timedelta(hours=24)
+    window_prev = now - timedelta(hours=48)
 
-    events_24h = (await db.execute(events_24h_stmt)).scalar_one()
-    avg_viral_score = float((await db.execute(avg_score_stmt)).scalar_one() or 0.0)
-    active_sources = (await db.execute(active_sources_stmt)).scalar_one()
-    high_priority_incidents = (await db.execute(high_priority_stmt)).scalar_one()
-    alerts = (await db.execute(alerts_stmt)).scalar_one()
+    def _where_cur(stmt):  return stmt.where(Incident.published_at >= window_cur)
+    def _where_prev(stmt): return stmt.where(Incident.published_at.between(window_prev, window_cur))
+
+    results = await asyncio.gather(
+        db.execute(_where_cur(select(func.count()))),
+        db.execute(_where_cur(select(func.coalesce(func.avg(Incident.viral_score), 0.0)))),
+        db.execute(_where_cur(select(func.count(func.distinct(Incident.source_id))))),
+        db.execute(_where_cur(select(func.count()).where(Incident.viral_score >= 80))),
+        db.execute(_where_cur(select(func.count()).where(Incident.viral_score >= 90))),
+        db.execute(_where_prev(select(func.count()))),
+        db.execute(_where_prev(select(func.coalesce(func.avg(Incident.viral_score), 0.0)))),
+    )
+
+    events_24h        = int(results[0].scalar_one())
+    avg_viral_score   = float(results[1].scalar_one() or 0.0)
+    active_sources    = int(results[2].scalar_one())
+    high_priority     = int(results[3].scalar_one())
+    alerts            = int(results[4].scalar_one())
+    events_prev       = int(results[5].scalar_one())
+    avg_score_prev    = float(results[6].scalar_one() or 0.0)
+
+    events_delta     = round((events_24h - events_prev) / events_prev * 100, 1) if events_prev else None
+    avg_score_delta  = round(avg_viral_score - avg_score_prev, 1) if avg_score_prev else None
 
     return KPIStats(
-        events_24h=int(events_24h),
+        events_24h=events_24h,
         avg_viral_score=round(avg_viral_score, 2),
-        active_sources=int(active_sources),
-        high_priority_incidents=int(high_priority_incidents),
-        alerts=int(alerts),
+        active_sources=active_sources,
+        high_priority_incidents=high_priority,
+        alerts=alerts,
+        events_24h_delta=events_delta,
+        avg_viral_score_delta=avg_score_delta,
     )
 
 
