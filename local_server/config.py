@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     pipeline_dedup_threshold: float = 0.88
     pipeline_max_text_length: int = 2000
 
-    cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+    cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,https://tn-intel.in,https://www.tn-intel.in,https://main.d2l0lone63w0d6.amplifyapp.com,https://d2l0lone63w0d6.amplifyapp.com"
 
     # AWS / DynamoDB — leave blank to disable cloud writes
     aws_region: str = "ap-south-1"
