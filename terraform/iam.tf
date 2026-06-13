@@ -34,13 +34,20 @@ data "aws_iam_policy_document" "lambda_permissions" {
       "${aws_dynamodb_table.incidents.arn}/index/*",
       aws_dynamodb_table.ws_connections.arn,
       "${aws_dynamodb_table.ws_connections.arn}/index/*",
+      aws_dynamodb_table.incidents_dev.arn,
+      "${aws_dynamodb_table.incidents_dev.arn}/index/*",
+      aws_dynamodb_table.ws_connections_dev.arn,
+      "${aws_dynamodb_table.ws_connections_dev.arn}/index/*",
     ]
   }
 
-  # Push messages to connected WebSocket clients
+  # Push messages to connected WebSocket clients (prod + dev)
   statement {
-    actions   = ["execute-api:ManageConnections"]
-    resources = ["${aws_apigatewayv2_api.websocket.execution_arn}/*"]
+    actions = ["execute-api:ManageConnections"]
+    resources = [
+      "${aws_apigatewayv2_api.websocket.execution_arn}/*",
+      "${aws_apigatewayv2_api.websocket_dev.execution_arn}/*",
+    ]
   }
 }
 
