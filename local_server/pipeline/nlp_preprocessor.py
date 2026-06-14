@@ -182,9 +182,9 @@ def preprocess(article: Dict) -> Dict:
     doc = nlp_multi(text) if article.get("language") == "ta" else nlp_en(text)
 
     entities = {
-        "persons": [normalize_person_name(e.text) for e in doc.ents if e.label_ == "PERSON"],
-        "organizations": [e.text for e in doc.ents if e.label_ == "ORG"],
-        "locations": [e.text for e in doc.ents if e.label_ in ("GPE", "LOC")],
+        "persons": list(dict.fromkeys(normalize_person_name(e.text) for e in doc.ents if e.label_ == "PERSON")),
+        "organizations": list(dict.fromkeys(e.text for e in doc.ents if e.label_ == "ORG")),
+        "locations": list(dict.fromkeys(e.text for e in doc.ents if e.label_ in ("GPE", "LOC"))),
     }
 
     entities["persons"] = [
