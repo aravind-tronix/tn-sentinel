@@ -248,6 +248,11 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
             print(f"❌ Embedding error: {type(e).__name__}: {str(e)[:100]}")
             return None
 
+        district_raw = extracted.district.lower().strip()
+        district_final = normalize_district(district_raw) or (
+            district_raw if district_raw in TN_DISTRICTS else "unknown"
+        )
+
         incident = {
             "source_id": article.get("source_id"),
             "source_name": article.get("source_name"),
@@ -255,7 +260,7 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
             "title": extracted.title,
             "summary": extracted.summary,
             "raw_text": article.get("text"),
-            "district": extracted.district.lower(),
+            "district": district_final,
             "category": extracted.category,
             "viral_score": extracted.viral_score,
             "sentiment": extracted.sentiment,
