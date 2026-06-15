@@ -67,6 +67,7 @@ SOURCES: List[Dict] = [
             "summary": "div.entry-summary p, p",
             "time": "time.entry-date, span.date",
             "image": "img[src]",
+            "url_filter": "/tamilnadu/",
         },
     },
     {

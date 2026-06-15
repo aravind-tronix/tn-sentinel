@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -8,18 +9,24 @@ from mangum import Mangum
 
 from dynamo import incidents_table, item_to_response
 
-# CORS is handled entirely by API Gateway HTTP API cors_configuration in Terraform.
-# Do not add CORSMiddleware here — it would double-set headers and leak "*".
 app = FastAPI(title="TN Sentinel API")
 
+# ── In-memory stats cache (5-minute TTL, lives for Lambda container lifetime) ──
+_cache: dict = {}
+CACHE_TTL = 300
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "tn-sentinel"}
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and time.time() - entry["ts"] < CACHE_TTL:
+        return entry["data"]
+    return None
+
+def _cache_set(key: str, data):
+    _cache[key] = {"data": data, "ts": time.time()}
 
 
+# ── Full exhaust ───────────────────────────────────────────────────────────────
 def _exhaust(table, op: str, kwargs: dict) -> list[dict]:
-    """Paginate through DynamoDB query/scan until all matching items are returned."""
     fn = table.query if op == "query" else table.scan
     items = []
     while True:
@@ -32,23 +39,31 @@ def _exhaust(table, op: str, kwargs: dict) -> list[dict]:
     return items
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "tn-sentinel"}
+
+
+# ── Incidents ──────────────────────────────────────────────────────────────────
 @app.get("/incidents")
 async def list_incidents(
-    district: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
+    district: Optional[str]  = Query(None),
+    category: Optional[str]  = Query(None),
     source_id: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
-    to_date: Optional[str] = Query(None),
-    limit: int = Query(20, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    to_date: Optional[str]   = Query(None),
+    limit: int               = Query(20, ge=1, le=200),
+    offset: int              = Query(0, ge=0),
+    min_confidence: float    = Query(0.0, ge=0.0, le=1.0),
+    exclude_unknown: bool    = Query(False),
 ):
     table = incidents_table()
 
     if district and category:
         cat = category.title()
         if from_date or to_date:
-            sk_from = f"{cat}#{from_date or '0000'}"
-            sk_to = f"{cat}#{to_date or '9999'}"
+            sk_from  = f"{cat}#{from_date or '0000'}"
+            sk_to    = f"{cat}#{to_date or '9999'}"
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").begins_with(f"{cat}#")
@@ -60,8 +75,8 @@ async def list_incidents(
 
     elif district:
         if from_date or to_date:
-            sk_from = from_date or "0000"
-            sk_to = (to_date or "9999") + "~"
+            sk_from  = from_date or "0000"
+            sk_to    = (to_date or "9999") + "~"
             key_cond = Key("district").eq(district.lower()) & Key("published_at_id").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower())
@@ -100,11 +115,22 @@ async def list_incidents(
             scan_kwargs["FilterExpression"] = Attr("published_at").lte(to_date)
         all_items = _exhaust(table, "scan", scan_kwargs)
 
-    # Sort descending by published_at for consistent ordering
-    all_items.sort(key=lambda x: x.get("published_at", ""), reverse=True)
-    total = len(all_items)
+    # Sort by published_at descending (scan doesn't guarantee order)
+    all_items.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+
+    # Post-filters
+    if min_confidence > 0:
+        all_items = [i for i in all_items if float(i.get("confidence") or 0) >= min_confidence]
+    if exclude_unknown:
+        all_items = [i for i in all_items if (i.get("district") or "unknown") != "unknown"]
+
+    total      = len(all_items)
     page_items = all_items[offset: offset + limit]
-    return {"incidents": [item_to_response(i) for i in page_items], "total": total}
+
+    return {
+        "incidents": [item_to_response(i) for i in page_items],
+        "total": total,
+    }
 
 
 @app.get("/incidents/{incident_id}")
@@ -120,11 +146,22 @@ async def get_incident(incident_id: int):
     return item_to_response(items[0])
 
 
+# ── Stats ──────────────────────────────────────────────────────────────────────
+def _norm_cat(raw: str | None) -> str:
+    if not raw:
+        return "Unknown"
+    return raw.title() if raw.islower() else raw
+
+
 @app.get("/stats/kpis")
 async def get_kpis():
-    now = datetime.utcnow()
-    window_cur  = (now - timedelta(hours=24)).isoformat()
-    window_prev = (now - timedelta(hours=48)).isoformat()
+    cached = _cache_get("kpis")
+    if cached:
+        return cached
+
+    now          = datetime.utcnow()
+    window_cur   = (now - timedelta(hours=24)).isoformat()
+    window_prev  = (now - timedelta(hours=48)).isoformat()
 
     cur_resp  = _exhaust(incidents_table(), "scan", {
         "FilterExpression": Attr("published_at").gte(window_cur),
@@ -135,34 +172,36 @@ async def get_kpis():
         "ProjectionExpression": "viral_score",
     })
 
-    scores_cur  = [int(i.get("viral_score", 0)) for i in cur_resp]
-    scores_prev = [int(i.get("viral_score", 0)) for i in prev_resp]
+    scores_cur  = [int(i.get("viral_score") or 0) for i in cur_resp]
+    scores_prev = [int(i.get("viral_score") or 0) for i in prev_resp]
+    avg_cur     = sum(scores_cur)  / len(scores_cur)  if scores_cur  else 0.0
+    avg_prev    = sum(scores_prev) / len(scores_prev) if scores_prev else 0.0
+    cnt_cur     = len(cur_resp)
+    cnt_prev    = len(prev_resp)
 
-    avg_cur  = sum(scores_cur)  / len(scores_cur)  if scores_cur  else 0.0
-    avg_prev = sum(scores_prev) / len(scores_prev) if scores_prev else 0.0
-    cnt_cur  = len(cur_resp)
-    cnt_prev = len(prev_resp)
-
-    events_delta    = round((cnt_cur - cnt_prev) / cnt_prev * 100, 1) if cnt_prev else None
-    avg_score_delta = round(avg_cur - avg_prev, 1) if avg_prev else None
-
-    return {
-        "events_24h": cnt_cur,
-        "avg_viral_score": round(avg_cur, 2),
-        "active_sources": len({i.get("source_id") for i in cur_resp if i.get("source_id")}),
+    result = {
+        "events_24h":             cnt_cur,
+        "avg_viral_score":        round(avg_cur, 2),
+        "active_sources":         len({i.get("source_id") for i in cur_resp if i.get("source_id")}),
         "high_priority_incidents": sum(1 for s in scores_cur if s >= 80),
-        "alerts": sum(1 for s in scores_cur if s >= 90),
-        "events_24h_delta": events_delta,
-        "avg_viral_score_delta": avg_score_delta,
+        "alerts":                 sum(1 for s in scores_cur if s >= 90),
+        "events_24h_delta":       round((cnt_cur - cnt_prev) / cnt_prev * 100, 1) if cnt_prev else None,
+        "avg_viral_score_delta":  round(avg_cur - avg_prev, 1) if avg_prev else None,
     }
+    _cache_set("kpis", result)
+    return result
 
 
 @app.get("/stats/districts")
 async def get_district_stats():
-    resp = incidents_table().scan(ProjectionExpression="district, category")
+    cached = _cache_get("districts")
+    if cached:
+        return cached
+
+    resp  = incidents_table().scan(ProjectionExpression="district, category")
     items = resp.get("Items", [])
 
-    counts: dict = {}
+    counts: dict     = {}
     cat_counts: dict = {}
     for item in items:
         d = item.get("district", "unknown")
@@ -170,46 +209,47 @@ async def get_district_stats():
         counts[d] = counts.get(d, 0) + 1
         cat_counts.setdefault(d, {})[c] = cat_counts.get(d, {}).get(c, 0) + 1
 
-    return [
+    result = [
         {"district": d, "count": n, "top_category": max(cat_counts[d], key=cat_counts[d].get)}
         for d, n in sorted(counts.items(), key=lambda x: -x[1])
     ]
-
-
-def _norm_cat(raw: str | None) -> str:
-    if not raw:
-        return "Unknown"
-    return raw.title() if raw.islower() else raw
+    _cache_set("districts", result)
+    return result
 
 
 @app.get("/stats/categories")
 async def get_category_stats():
-    resp = incidents_table().scan(ProjectionExpression="category")
-    items = resp.get("Items", [])
+    cached = _cache_get("categories")
+    if cached:
+        return cached
 
+    resp  = incidents_table().scan(ProjectionExpression="category")
+    items = resp.get("Items", [])
     counts: dict = {}
     for item in items:
         c = _norm_cat(item.get("category"))
         counts[c] = counts.get(c, 0) + 1
 
-    return [{"category": c, "count": n} for c, n in sorted(counts.items(), key=lambda x: -x[1])]
+    result = [{"category": c, "count": n} for c, n in sorted(counts.items(), key=lambda x: -x[1])]
+    _cache_set("categories", result)
+    return result
 
 
 @app.get("/stats/timeline")
-async def get_timeline(days: int = Query(30, ge=7, le=90), breakdown: bool = Query(False)):
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    proj = "published_at, category" if breakdown else "published_at"
-    items = _exhaust(incidents_table(), "scan", {
-        "FilterExpression": Attr("published_at").gte(since),
-        "ProjectionExpression": proj,
-    })
+async def get_timeline(days: int = Query(30, ge=0, le=2000), breakdown: bool = Query(False)):
+    proj        = "published_at, category" if breakdown else "published_at"
+    scan_kwargs: dict = {"ProjectionExpression": proj}
+    if days > 0:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        scan_kwargs["FilterExpression"] = Attr("published_at").gte(since)
+    items = _exhaust(incidents_table(), "scan", scan_kwargs)
 
     if breakdown:
         counts: dict = {}
         for item in items:
-            pub = item.get("published_at", "")
+            pub     = item.get("published_at", "")
             raw_cat = item.get("category") or "Other"
-            cat = raw_cat.title() if raw_cat.islower() else raw_cat
+            cat     = raw_cat.title() if raw_cat.islower() else raw_cat
             if pub:
                 key = (pub[:10], cat)
                 counts[key] = counts.get(key, 0) + 1
@@ -225,55 +265,100 @@ async def get_timeline(days: int = Query(30, ge=7, le=90), breakdown: bool = Que
 
 @app.get("/stats/sentiment")
 async def get_sentiment_stats():
+    cached = _cache_get("sentiment")
+    if cached:
+        return cached
+
     items = _exhaust(incidents_table(), "scan", {
         "FilterExpression": Attr("sentiment").exists(),
         "ProjectionExpression": "sentiment",
     })
-
     counts: dict = {}
     for item in items:
         s = item.get("sentiment")
         if s:
             counts[s] = counts.get(s, 0) + 1
 
-    return [{"sentiment": s, "count": n} for s, n in sorted(counts.items(), key=lambda x: -x[1])]
+    result = [{"sentiment": s, "count": n} for s, n in sorted(counts.items(), key=lambda x: -x[1])]
+    _cache_set("sentiment", result)
+    return result
 
 
 @app.get("/stats/sources")
 async def get_source_stats():
+    cached = _cache_get("sources")
+    if cached:
+        return cached
+
     items = _exhaust(incidents_table(), "scan", {
         "FilterExpression": Attr("source_name").exists(),
         "ProjectionExpression": "source_name",
     })
-
     counts: dict = {}
     for item in items:
         src = item.get("source_name")
         if src:
             counts[src] = counts.get(src, 0) + 1
 
-    return [
-        {"source_name": s, "count": n}
-        for s, n in sorted(counts.items(), key=lambda x: -x[1])[:10]
-    ]
+    result = [{"source_name": s, "count": n} for s, n in sorted(counts.items(), key=lambda x: -x[1])[:10]]
+    _cache_set("sources", result)
+    return result
 
 
 @app.get("/stats/viral-distribution")
 async def get_viral_distribution():
-    items = _exhaust(incidents_table(), "scan", {
-        "ProjectionExpression": "viral_score",
-    })
+    cached = _cache_get("viral_dist")
+    if cached:
+        return cached
 
+    items   = _exhaust(incidents_table(), "scan", {"ProjectionExpression": "viral_score"})
     buckets = [(0, 20, "Low"), (20, 40, "Moderate"), (40, 60, "High"), (60, 80, "Critical"), (80, 101, "Viral")]
-    counts = {label: 0 for _, _, label in buckets}
+    counts  = {label: 0 for _, _, label in buckets}
     for item in items:
-        score = int(item.get("viral_score", 0))
+        score = int(item.get("viral_score") or 0)
         for lo, hi, label in buckets:
             if lo <= score < hi:
                 counts[label] += 1
                 break
 
-    return [{"bucket": label, "lo": lo, "count": counts[label]} for lo, _, label in buckets]
+    result = [{"bucket": label, "lo": lo, "count": counts[label]} for lo, _, label in buckets]
+    _cache_set("viral_dist", result)
+    return result
+
+
+@app.get("/stats/trending")
+async def get_trending(hours: int = Query(24, ge=1, le=168), limit: int = Query(5, ge=1, le=20)):
+    """Top incidents by viral score in the last N hours."""
+    since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    items = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("published_at").gte(since),
+        "ProjectionExpression": "district, category, viral_score, title, published_at, #u, id, source_name, sentiment, confidence, source_id, #lang, entities, scraped_at, summary, image_url",
+        "ExpressionAttributeNames": {"#u": "url", "#lang": "language"},
+    })
+    items.sort(key=lambda x: int(x.get("viral_score") or 0), reverse=True)
+    return [item_to_response(i) for i in items[:limit]]
+
+
+@app.get("/stats/sources/health")
+async def get_source_health():
+    """Last seen article time per source (derived from incidents table)."""
+    since = (datetime.utcnow() - timedelta(days=14)).isoformat()
+    items = _exhaust(incidents_table(), "scan", {
+        "FilterExpression": Attr("published_at").gte(since),
+        "ProjectionExpression": "source_id, source_name, published_at",
+    })
+    latest: dict = {}
+    for item in items:
+        src = item.get("source_id")
+        pub = item.get("published_at", "")
+        if src and pub:
+            if src not in latest or pub > latest[src]["last_seen"]:
+                latest[src] = {
+                    "source_id":   src,
+                    "source_name": item.get("source_name", src),
+                    "last_seen":   pub,
+                }
+    return sorted(latest.values(), key=lambda x: x["last_seen"], reverse=True)
 
 
 lambda_handler = Mangum(app, lifespan="off")

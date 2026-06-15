@@ -30,6 +30,9 @@ logss.txt
 Thumbs.db
 .claude
 
+# Runtime / generated
+scripts/gdelt_progress.json
+
 # Terraform
 terraform/.terraform/
 terraform/.terraform.lock.hcl

@@ -176,6 +176,26 @@ terraform apply -var="github_token=<token>"
 
 ---
 
+## Roadmap / TODO
+
+### Source Diversification
+> *Feedback: Don't rely solely on large media outlets — editorial priorities influence which stories get covered. Add regional and micro-news sources for broader ground-level coverage.*
+
+- [ ] **Add regional Tamil newspaper RSS feeds** — Dinamalar, Dinakaran, Daily Thanthi, Vikatan, Puthiyathalaimurai, Polimer News, Thina Mani. These cover district-level stories that English mainstream media ignores.
+- [ ] **Add hyperlocal sources** — district-level news sites, Tamil Nadu government press releases, district collector announcements.
+- [ ] **Integrate NewsAPI / Mediastack** — supports Tamil Nadu geo-filtering; can supplement RSS scraping with broader API coverage.
+- [ ] **GDELT live feed** — already used for historical scraping; extend to real-time mode for continuous ingestion.
+
+### Tamil Language Support
+- [ ] Add Tamil-language NLP pipeline — current spaCy model is English-only; Tamil sources need a multilingual or Tamil-specific NER model.
+- [ ] LLM extraction in Tamil — verify gemma3:4b handles Tamil text or add a translation step before extraction.
+
+### Category Expansion
+- [ ] Add non-crime categories to `IncidentExtraction` schema: **Civic Issues**, **Infrastructure**, **Public Grievances**, **Community Events** — to reflect the broader scope of local news beyond crime.
+- [ ] Update triage prompt to pass civic/infrastructure articles instead of filtering them out.
+
+---
+
 ## Incident schema
 
 | Field | Type | Description |
