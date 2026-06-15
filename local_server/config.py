@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     ollama_extractor_model: str = "gemma3:4b"
     ollama_embed_model: str = "nomic-embed-text"
     ollama_single_model: str | None = None
-    ollama_num_ctx: int = 2048
+    ollama_num_ctx: int = 4096
     ollama_num_gpu: int = 1
     ollama_num_thread: int = 6
     ollama_temperature: float = 0.0
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     event_broadcaster_url: str = "http://localhost:8000"
 
     pipeline_dedup_threshold: float = 0.88
-    pipeline_max_text_length: int = 2000
+    pipeline_max_text_length: int = 3500
 
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,https://tn-intel.in,https://www.tn-intel.in,https://main.d2l0lone63w0d6.amplifyapp.com,https://d2l0lone63w0d6.amplifyapp.com"
 
