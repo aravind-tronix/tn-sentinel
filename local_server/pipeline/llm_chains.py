@@ -42,7 +42,7 @@ embedder = OllamaEmbeddings(
 class IncidentExtraction(BaseModel):
     title: str = Field(description="Short English title, max 12 words")
     district: str = Field(description="TN district name in lowercase")
-    category: str = Field(description="One of: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud, Civic Issue, Infrastructure, Public Grievance, Community Event")
+    category: str = Field(description="One of: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud")
     viral_score: int = Field(description="Score between 0 and 100")
     summary: str = Field(description="2-sentence professional summary")
     sentiment: str = Field(description="positive / neutral / negative")
@@ -53,7 +53,7 @@ parser = PydanticOutputParser(pydantic_object=IncidentExtraction)
 # ========================= PROMPTS =========================
 TRIAGE_PROMPT = PromptTemplate(
     input_variables=["text"],
-    template="""Is this article about a crime, public safety incident, civic issue, infrastructure problem, or public grievance in Tamil Nadu, India?
+    template="""Is this article about a crime or public safety incident in Tamil Nadu, India?
 Reply with only YES or NO.
 
 Article: {text}""",
@@ -71,7 +71,7 @@ NLP Hints (use but override if incorrect):
 - Entities: {entities}
 
 Valid Districts (lowercase): chennai, coimbatore, madurai, tiruchirappalli, salem, tirunelveli, vellore, erode, thoothukudi, dindigul, kanchipuram, krishnagiri, namakkal, theni, karur, dharmapuri, nilgiris, ariyalur, perambalur, cuddalore, villupuram, nagapattinam, thanjavur, tiruvarur, pudukkottai, sivaganga, virudhunagar, ramanathapuram, tenkasi, kanyakumari, tiruppur, ranipet, chengalpattu, tirupattur, kallakurichi, mayiladuthurai
-Valid Categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud, Civic Issue, Infrastructure, Public Grievance, Community Event
+Valid Categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud
 
 Viral Score Guidelines (0-100):
 - Base: 50

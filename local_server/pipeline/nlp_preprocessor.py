@@ -198,10 +198,6 @@ CRIME_KEYWORDS = {
     "Road Accident": ["road accident", "crash", "collision", "hit-and-run", "fatal accident"],
     "Sexual Offence": ["rape", "molestation", "sexual assault", "sexual offence"],
     "Fraud": ["fraud", "cheated", "fake scheme", "fraudulent", "forgery"],
-    "Civic Issue": ["corporation", "panchayat", "municipality", "civic", "garbage", "sanitation", "drainage", "sewage", "stray dogs", "street light"],
-    "Infrastructure": ["road damage", "pothole", "bridge", "water supply", "power cut", "electricity", "blackout", "pipeline", "infrastructure", "construction"],
-    "Public Grievance": ["protest", "grievance", "complaint", "demonstration", "demand", "agitation", "petition", "strike", "rally"],
-    "Community Event": ["festival", "community", "village", "panchayat election", "local body", "ward", "inauguration", "public event"],
 }
 
 PERSON_NOISE = {

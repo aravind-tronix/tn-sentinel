@@ -329,25 +329,7 @@ SOURCES: List[Dict] = [
         "window_minutes": 70,     # slight overlap to avoid gaps
     },
 
-    # ── Civic / Infrastructure / Public Grievance feeds ──────────────────────
-    {
-        "id": "google_news_tn_civic",
-        "name": "Google News TN Civic Issues",
-        "type": "rss",
-        "url": "https://news.google.com/rss/search?q=Tamil+Nadu+civic+OR+corporation+OR+panchayat+OR+grievance&hl=en-IN&gl=IN&ceid=IN:en",
-        "language": "en",
-        "tier": 2,
-        "interval_min": 45,
-    },
-    {
-        "id": "google_news_tn_infrastructure",
-        "name": "Google News TN Infrastructure",
-        "type": "rss",
-        "url": "https://news.google.com/rss/search?q=Tamil+Nadu+road+OR+water+supply+OR+electricity+OR+infrastructure+problem&hl=en-IN&gl=IN&ceid=IN:en",
-        "language": "en",
-        "tier": 2,
-        "interval_min": 45,
-    },
+    # ── Additional crime/incident feeds ─────────────────────────────────────
     {
         "id": "google_news_tn_accident",
         "name": "Google News TN Accidents",
