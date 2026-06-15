@@ -1,5 +1,3 @@
-import base64
-import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -27,22 +25,7 @@ def _cache_set(key: str, data):
     _cache[key] = {"data": data, "ts": time.time()}
 
 
-# ── Cursor helpers ─────────────────────────────────────────────────────────────
-def _decode_cursor(cursor: str | None) -> dict | None:
-    if not cursor:
-        return None
-    try:
-        return json.loads(base64.b64decode(cursor.encode()).decode())
-    except Exception:
-        return None
-
-def _encode_cursor(lek: dict | None) -> str | None:
-    if not lek:
-        return None
-    return base64.b64encode(json.dumps(lek).encode()).decode()
-
-
-# ── Full exhaust (for stats/aggregations only — NOT for paginated incidents) ───
+# ── Full exhaust ───────────────────────────────────────────────────────────────
 def _exhaust(table, op: str, kwargs: dict) -> list[dict]:
     fn = table.query if op == "query" else table.scan
     items = []
@@ -69,30 +52,26 @@ async def list_incidents(
     source_id: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str]   = Query(None),
-    limit: int               = Query(20, ge=1, le=100),
-    cursor: Optional[str]    = Query(None),
+    limit: int               = Query(20, ge=1, le=200),
+    offset: int              = Query(0, ge=0),
     min_confidence: float    = Query(0.0, ge=0.0, le=1.0),
     exclude_unknown: bool    = Query(False),
 ):
     table = incidents_table()
-    lek   = _decode_cursor(cursor)
-    extra = {"ExclusiveStartKey": lek} if lek else {}
 
     if district and category:
         cat = category.title()
         if from_date or to_date:
-            sk_from = f"{cat}#{from_date or '0000'}"
-            sk_to   = f"{cat}#{to_date or '9999'}"
+            sk_from  = f"{cat}#{from_date or '0000'}"
+            sk_to    = f"{cat}#{to_date or '9999'}"
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower()) & Key("cat_time").begins_with(f"{cat}#")
-        resp = table.query(
-            IndexName="district-category-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-            **extra,
-        )
+        all_items = _exhaust(table, "query", {
+            "IndexName": "district-category-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif district:
         if from_date or to_date:
@@ -101,62 +80,56 @@ async def list_incidents(
             key_cond = Key("district").eq(district.lower()) & Key("published_at_id").between(sk_from, sk_to)
         else:
             key_cond = Key("district").eq(district.lower())
-        resp = table.query(
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-            **extra,
-        )
+        all_items = _exhaust(table, "query", {
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif category:
         key_cond = Key("category").eq(category.title())
         if from_date or to_date:
             key_cond = key_cond & Key("published_at").between(from_date or "0000", to_date or "9999")
-        resp = table.query(
-            IndexName="category-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-            **extra,
-        )
+        all_items = _exhaust(table, "query", {
+            "IndexName": "category-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     elif source_id:
         key_cond = Key("source_id").eq(source_id)
         if from_date or to_date:
             key_cond = key_cond & Key("published_at").between(from_date or "0000", to_date or "9999")
-        resp = table.query(
-            IndexName="source-time-index",
-            KeyConditionExpression=key_cond,
-            ScanIndexForward=False,
-            Limit=limit,
-            **extra,
-        )
+        all_items = _exhaust(table, "query", {
+            "IndexName": "source-time-index",
+            "KeyConditionExpression": key_cond,
+            "ScanIndexForward": False,
+        })
 
     else:
-        scan_kwargs: dict = {"Limit": limit, **extra}
-        filters = []
+        scan_kwargs: dict = {}
         if from_date and to_date:
-            filters.append(Attr("published_at").between(from_date, to_date))
+            scan_kwargs["FilterExpression"] = Attr("published_at").between(from_date, to_date)
         elif from_date:
-            filters.append(Attr("published_at").gte(from_date))
+            scan_kwargs["FilterExpression"] = Attr("published_at").gte(from_date)
         elif to_date:
-            filters.append(Attr("published_at").lte(to_date))
-        if filters:
-            scan_kwargs["FilterExpression"] = filters[0]
-        resp = table.scan(**scan_kwargs)
+            scan_kwargs["FilterExpression"] = Attr("published_at").lte(to_date)
+        all_items = _exhaust(table, "scan", scan_kwargs)
 
-    items = resp.get("Items", [])
-    next_cursor = _encode_cursor(resp.get("LastEvaluatedKey"))
+    # Sort by published_at descending (scan doesn't guarantee order)
+    all_items.sort(key=lambda x: x.get("published_at") or "", reverse=True)
 
-    # Post-filters (applied after DynamoDB fetch)
+    # Post-filters
     if min_confidence > 0:
-        items = [i for i in items if float(i.get("confidence") or 0) >= min_confidence]
+        all_items = [i for i in all_items if float(i.get("confidence") or 0) >= min_confidence]
     if exclude_unknown:
-        items = [i for i in items if (i.get("district") or "unknown") != "unknown"]
+        all_items = [i for i in all_items if (i.get("district") or "unknown") != "unknown"]
+
+    total      = len(all_items)
+    page_items = all_items[offset: offset + limit]
 
     return {
-        "incidents": [item_to_response(i) for i in items],
-        "next_cursor": next_cursor,
+        "incidents": [item_to_response(i) for i in page_items],
+        "total": total,
     }
 
 
