@@ -196,13 +196,13 @@ async def get_category_stats():
 
 
 @app.get("/stats/timeline")
-async def get_timeline(days: int = Query(30, ge=7, le=90), breakdown: bool = Query(False)):
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+async def get_timeline(days: int = Query(30, ge=0, le=2000), breakdown: bool = Query(False)):
     proj = "published_at, category" if breakdown else "published_at"
-    items = _exhaust(incidents_table(), "scan", {
-        "FilterExpression": Attr("published_at").gte(since),
-        "ProjectionExpression": proj,
-    })
+    scan_kwargs: dict = {"ProjectionExpression": proj}
+    if days > 0:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        scan_kwargs["FilterExpression"] = Attr("published_at").gte(since)
+    items = _exhaust(incidents_table(), "scan", scan_kwargs)
 
     if breakdown:
         counts: dict = {}
