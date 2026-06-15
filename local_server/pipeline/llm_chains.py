@@ -42,7 +42,7 @@ embedder = OllamaEmbeddings(
 class IncidentExtraction(BaseModel):
     title: str = Field(description="Short English title, max 12 words")
     district: str = Field(description="TN district name in lowercase")
-    category: str = Field(description="One of: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud")
+    category: str = Field(description="One of: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud, Civic Issue, Infrastructure, Public Grievance, Community Event")
     viral_score: int = Field(description="Score between 0 and 100")
     summary: str = Field(description="2-sentence professional summary")
     sentiment: str = Field(description="positive / neutral / negative")
@@ -53,23 +53,25 @@ parser = PydanticOutputParser(pydantic_object=IncidentExtraction)
 # ========================= PROMPTS =========================
 TRIAGE_PROMPT = PromptTemplate(
     input_variables=["text"],
-    template="""Is this article about a crime or public safety incident in Tamil Nadu, India?
+    template="""Is this article about a crime, public safety incident, civic issue, infrastructure problem, or public grievance in Tamil Nadu, India?
 Reply with only YES or NO.
 
 Article: {text}""",
 )
 
 EXTRACT_PROMPT = PromptTemplate(
-    input_variables=["text", "detected_district", "detected_category", "entities", "format_instructions"],
+    input_variables=["text", "detected_district", "detected_category", "entities", "language", "format_instructions"],
     template="""You are an experienced Tamil Nadu Crime Intelligence Analyst.
+The article may be in English or Tamil. Extract information regardless of language and always respond in English.
 
 NLP Hints (use but override if incorrect):
+- Article Language: {language}
 - Detected District: {detected_district}
 - Detected Category: {detected_category}
 - Entities: {entities}
 
 Valid Districts (lowercase): chennai, coimbatore, madurai, tiruchirappalli, salem, tirunelveli, vellore, erode, thoothukudi, dindigul, kanchipuram, krishnagiri, namakkal, theni, karur, dharmapuri, nilgiris, ariyalur, perambalur, cuddalore, villupuram, nagapattinam, thanjavur, tiruvarur, pudukkottai, sivaganga, virudhunagar, ramanathapuram, tenkasi, kanyakumari, tiruppur, ranipet, chengalpattu, tirupattur, kallakurichi, mayiladuthurai
-Valid Categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud
+Valid Categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud, Civic Issue, Infrastructure, Public Grievance, Community Event
 
 Viral Score Guidelines (0-100):
 - Base: 50
@@ -222,6 +224,7 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
                     "detected_district": (article.get("detected_district") or "unknown").lower(),
                     "detected_category": (article.get("detected_category") or "unknown"),
                     "entities": str(article.get("entities", {})),
+                    "language": article.get("language", "en"),
                     "format_instructions": parser.get_format_instructions(),
                 }),
                 timeout=420.0,

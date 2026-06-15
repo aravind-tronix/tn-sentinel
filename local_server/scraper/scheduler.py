@@ -5,12 +5,16 @@ from typing import Callable
 from .registry import SOURCES
 from .extractors.rss_extractor import RSSExtractor
 from .extractors.html_extractor import HTMLExtractor
+from .extractors.gdelt_extractor import GDELTExtractor
+from .extractors.newsapi_extractor import NewsAPIExtractor
 from .queue import RawArticleQueue
 from .dedup import Deduplicator
 
 EXTRACTOR_MAP = {
-    "rss": RSSExtractor,
-    "html": HTMLExtractor,
+    "rss":     RSSExtractor,
+    "html":    HTMLExtractor,
+    "gdelt":   GDELTExtractor,
+    "newsapi": NewsAPIExtractor,
 }
 
 queue = RawArticleQueue()

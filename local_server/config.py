@@ -35,6 +35,9 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,https://tn-intel.in,https://www.tn-intel.in,https://main.d2l0lone63w0d6.amplifyapp.com,https://d2l0lone63w0d6.amplifyapp.com"
 
+    # NewsAPI — leave blank to disable (get key at newsapi.org)
+    newsapi_key: str = ""
+
     # AWS / DynamoDB — leave blank to disable cloud writes
     aws_region: str = "ap-south-1"
     dynamodb_incidents_table: str = ""
