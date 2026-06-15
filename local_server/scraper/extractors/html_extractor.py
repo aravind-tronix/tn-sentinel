@@ -125,6 +125,10 @@ class HTMLExtractor(BaseExtractor):
             if not title or not url:
                 continue
 
+            url_filter = selectors.get("url_filter")
+            if url_filter and url_filter not in url:
+                continue
+
             full_text = await self._fetch_full_text(url)
             text = self.normalize_text(full_text or summary or title)
             summary_text = self.normalize_text(summary)[:500] if summary else (self.normalize_text(full_text)[:500] if full_text else None)
