@@ -113,15 +113,21 @@ async def gdelt_fetch(query: str, start_dt: str, end_dt: str) -> list[dict]:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(GDELT_URL, params=params)
                 if resp.status_code == 429:
-                    wait = 10 * (attempt + 1)
+                    wait = 15 * (attempt + 1)
                     print(f"  ⏳ GDELT rate limited — waiting {wait}s")
                     await asyncio.sleep(wait)
                     continue
                 resp.raise_for_status()
+                text = resp.text.strip()
+                if not text:
+                    wait = 10 * (attempt + 1)
+                    print(f"  ⏳ GDELT empty response — waiting {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
                 return resp.json().get("articles", [])
         except Exception as e:
             print(f"  ⚠️  GDELT error (attempt {attempt+1}): {e}")
-            await asyncio.sleep(6)
+            await asyncio.sleep(10)
     return []
 
 
