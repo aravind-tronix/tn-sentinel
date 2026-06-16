@@ -53,7 +53,15 @@ parser = PydanticOutputParser(pydantic_object=IncidentExtraction)
 # ========================= PROMPTS =========================
 TRIAGE_PROMPT = PromptTemplate(
     input_variables=["text"],
-    template="""Is this article about a crime or public safety incident in Tamil Nadu, India?
+    template="""You are filtering news for a Tamil Nadu crime intelligence feed.
+Reply YES only if the article's MAIN subject is a specific, already-occurred crime incident in Tamil Nadu matching one of these categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud.
+
+Reply NO if the article is:
+- A court hearing, order, judgment, bail plea, or other legal/procedural news that does not itself describe the underlying crime in detail
+- A political statement, opinion, reaction, or policy debate about crime (even if it references past incidents)
+- An accident, fire, or hazard NOT caused by criminal intent (e.g. LPG cylinder explosion, electrical fire, building collapse, natural disaster)
+- General civic, infrastructure, administrative, or election news
+
 Reply with only YES or NO.
 
 Article: {text}""",
