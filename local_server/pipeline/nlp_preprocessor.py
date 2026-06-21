@@ -145,6 +145,48 @@ CITY_TO_DISTRICT = {
     "tn": "unknown",
     "puducherry": "unknown",
     "pondicherry": "unknown",
+
+    # Tamil script district names
+    "சென்னை": "chennai",
+    "கோயம்புத்தூர்": "coimbatore",
+    "மதுரை": "madurai",
+    "திருச்சிராப்பள்ளி": "tiruchirappalli",
+    "திருச்சி": "tiruchirappalli",
+    "சேலம்": "salem",
+    "திருநெல்வேலி": "tirunelveli",
+    "வேலூர்": "vellore",
+    "ஈரோடு": "erode",
+    "தூத்துக்குடி": "thoothukudi",
+    "தூத்துக்குடி": "thoothukudi",
+    "திண்டுக்கல்": "dindigul",
+    "கன்னியாகுமரி": "kanyakumari",
+    "தஞ்சாவூர்": "thanjavur",
+    "திருவண்ணாமலை": "tiruvannamalai",
+    "கிருஷ்ணகிரி": "krishnagiri",
+    "நாமக்கல்": "namakkal",
+    "தேனி": "theni",
+    "கரூர்": "karur",
+    "தர்மபுரி": "dharmapuri",
+    "நீலகிரி": "nilgiris",
+    "அரியலூர்": "ariyalur",
+    "பெரம்பலூர்": "perambalur",
+    "கடலூர்": "cuddalore",
+    "விழுப்புரம்": "villupuram",
+    "நாகப்பட்டினம்": "nagapattinam",
+    "புதுக்கோட்டை": "pudukkottai",
+    "சிவகங்கை": "sivaganga",
+    "விருதுநகர்": "virudhunagar",
+    "இராமநாதபுரம்": "ramanathapuram",
+    "தென்காசி": "tenkasi",
+    "திருப்பூர்": "tiruppur",
+    "ரானிப்பேட்டை": "ranipet",
+    "செங்கல்பட்டு": "chengalpattu",
+    "திருப்பத்தூர்": "tirupattur",
+    "கள்ளக்குறிச்சி": "kallakurichi",
+    "மயிலாடுதுறை": "mayiladuthurai",
+    "திருவள்ளூர்": "tiruvallur",
+    "திருவாரூர்": "tiruvarur",
+    "கஞ்சிபுரம்": "kanchipuram",
 }
 
 CRIME_KEYWORDS = {
@@ -194,14 +236,16 @@ def preprocess(article: Dict) -> Dict:
 
     text_lower = text.lower()
     detected_district = None
-    
+
     # Stage 1: exact district keyword match in raw text
     detected_district = next((d for d in TN_DISTRICTS if d in text_lower), None)
-    
-    # Stage 2: exact city/town name match in raw text
+
+    # Stage 2: exact city/town name match in raw text (handles Tamil script too)
     if not detected_district:
         for city, district in CITY_TO_DISTRICT.items():
-            if city in text_lower and district != "unknown":
+            needle = city if any(ord(c) > 127 for c in city) else city  # Tamil script: check original text
+            haystack = text if any(ord(c) > 127 for c in city) else text_lower
+            if needle in haystack and district != "unknown":
                 detected_district = district
                 break
     

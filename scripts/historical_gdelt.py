@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from local_server.scraper.queue import RawArticleQueue
 from local_server.scraper.extractors.base import RawArticle
+from local_server.scraper.dedup import Deduplicator
 
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -112,15 +113,21 @@ async def gdelt_fetch(query: str, start_dt: str, end_dt: str) -> list[dict]:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(GDELT_URL, params=params)
                 if resp.status_code == 429:
-                    wait = 10 * (attempt + 1)
+                    wait = 15 * (attempt + 1)
                     print(f"  ⏳ GDELT rate limited — waiting {wait}s")
                     await asyncio.sleep(wait)
                     continue
                 resp.raise_for_status()
+                text = resp.text.strip()
+                if not text:
+                    wait = 10 * (attempt + 1)
+                    print(f"  ⏳ GDELT empty response — waiting {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
                 return resp.json().get("articles", [])
         except Exception as e:
             print(f"  ⚠️  GDELT error (attempt {attempt+1}): {e}")
-            await asyncio.sleep(6)
+            await asyncio.sleep(10)
     return []
 
 
@@ -168,6 +175,7 @@ def parse_gdelt_date(seendate: str) -> datetime | None:
 
 async def main(start: str, end: str, pause: float) -> None:
     queue = RawArticleQueue()
+    dedup = Deduplicator()
     seen_urls: set[str] = set()
     done = load_progress()
 
@@ -193,7 +201,14 @@ async def main(start: str, end: str, pause: float) -> None:
             batch_queued = 0
             for art in articles:
                 url = art.get("url", "").strip()
+                title = art.get("title", "").strip()
+
                 if not url or url in seen_urls:
+                    total_skipped += 1
+                    continue
+
+                if await dedup.is_duplicate(url, title):
+                    seen_urls.add(url)
                     total_skipped += 1
                     continue
 
@@ -208,11 +223,12 @@ async def main(start: str, end: str, pause: float) -> None:
                     source_id="gdelt_historical",
                     source_name=f"GDELT/{art.get('domain', 'unknown')}",
                     url=url,
-                    title=art.get("title", "").strip(),
+                    title=title,
                     text=text,
                     language="en",
                     published_at=parse_gdelt_date(art.get("seendate", "")),
                 )
+                await dedup.mark_seen(url, title)
                 await queue.push(raw.to_dict())
                 batch_queued += 1
                 total_queued += 1

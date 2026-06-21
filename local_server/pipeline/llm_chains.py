@@ -53,17 +53,27 @@ parser = PydanticOutputParser(pydantic_object=IncidentExtraction)
 # ========================= PROMPTS =========================
 TRIAGE_PROMPT = PromptTemplate(
     input_variables=["text"],
-    template="""Is this article about a crime or public safety incident in Tamil Nadu, India?
+    template="""You are filtering news for a Tamil Nadu crime intelligence feed.
+Reply YES only if the article's MAIN subject is a specific, already-occurred crime incident in Tamil Nadu matching one of these categories: Homicide, Theft, Cybercrime, Assault, Narcotics, Road Accident, Sexual Offence, Fraud.
+
+Reply NO if the article is:
+- A court hearing, order, judgment, bail plea, or other legal/procedural news that does not itself describe the underlying crime in detail
+- A political statement, opinion, reaction, or policy debate about crime (even if it references past incidents)
+- An accident, fire, or hazard NOT caused by criminal intent (e.g. LPG cylinder explosion, electrical fire, building collapse, natural disaster)
+- General civic, infrastructure, administrative, or election news
+
 Reply with only YES or NO.
 
 Article: {text}""",
 )
 
 EXTRACT_PROMPT = PromptTemplate(
-    input_variables=["text", "detected_district", "detected_category", "entities", "format_instructions"],
+    input_variables=["text", "detected_district", "detected_category", "entities", "language", "format_instructions"],
     template="""You are an experienced Tamil Nadu Crime Intelligence Analyst.
+The article may be in English or Tamil. Extract information regardless of language and always respond in English.
 
 NLP Hints (use but override if incorrect):
+- Article Language: {language}
 - Detected District: {detected_district}
 - Detected Category: {detected_category}
 - Entities: {entities}
@@ -222,6 +232,7 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
                     "detected_district": (article.get("detected_district") or "unknown").lower(),
                     "detected_category": (article.get("detected_category") or "unknown"),
                     "entities": str(article.get("entities", {})),
+                    "language": article.get("language", "en"),
                     "format_instructions": parser.get_format_instructions(),
                 }),
                 timeout=420.0,

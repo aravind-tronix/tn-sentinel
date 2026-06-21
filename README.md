@@ -190,10 +190,6 @@ terraform apply -var="github_token=<token>"
 - [ ] Add Tamil-language NLP pipeline — current spaCy model is English-only; Tamil sources need a multilingual or Tamil-specific NER model.
 - [ ] LLM extraction in Tamil — verify gemma3:4b handles Tamil text or add a translation step before extraction.
 
-### Category Expansion
-- [ ] Add non-crime categories to `IncidentExtraction` schema: **Civic Issues**, **Infrastructure**, **Public Grievances**, **Community Events** — to reflect the broader scope of local news beyond crime.
-- [ ] Update triage prompt to pass civic/infrastructure articles instead of filtering them out.
-
 ---
 
 ## Incident schema
