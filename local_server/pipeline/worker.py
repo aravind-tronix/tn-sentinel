@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 
 from local_server.config import get_settings
 from local_server.db.models import AsyncSessionLocal, Incident, init_db
-from local_server.pipeline.llm_chains import process_article
+from local_server.pipeline.claude_chains import process_article
 from local_server.aws.dynamo import save_incident_to_dynamo, broadcast_to_ws
 from local_server.api.schemas import IncidentResponse
 
