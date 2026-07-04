@@ -149,12 +149,12 @@ async def _run_query(prompt: str, options: ClaudeAgentOptions, timeout: float = 
 
 # ── Stage 1: Triage ───────────────────────────────────────────────────────────
 
-async def triage_article(text: str) -> bool:
-    """Return True if the article describes a relevant Tamil Nadu crime incident."""
+async def triage_article(text: str) -> tuple[bool, Optional[str]]:
+    """Return (is_crime, session_id)."""
     options = _base_options(
         system_prompt=_TRIAGE_SYSTEM,
         max_turns=1,
-        effort="low",       # binary decision — low effort is fast and sufficient
+        effort="low",
     )
     result = await _run_query(
         prompt=f"Triage this article:\n\n{text[:900]}",
@@ -162,16 +162,15 @@ async def triage_article(text: str) -> bool:
         timeout=45.0,
     )
     if not result:
-        return False
+        return False, None
     answer = (result.result or "").strip().upper()
-    return "YES" in answer and "NO" not in answer
+    return ("YES" in answer and "NO" not in answer), result.session_id
 
 
 # ── Stage 2: Extraction ───────────────────────────────────────────────────────
 
-async def extract_incident(text: str, spacy_hints: dict) -> Optional[dict]:
-    """Extract structured incident fields. Returns a dict or None."""
-    # Inject spaCy NLP hints as context
+async def extract_incident(text: str, spacy_hints: dict) -> tuple[Optional[dict], Optional[str]]:
+    """Return (extracted_dict, session_id)."""
     hints_lines = []
     if spacy_hints.get("detected_district"):
         hints_lines.append(f"spaCy detected district: {spacy_hints['detected_district']}")
@@ -184,7 +183,7 @@ async def extract_incident(text: str, spacy_hints: dict) -> Optional[dict]:
     options = _base_options(
         system_prompt=_EXTRACTION_SYSTEM,
         max_turns=1,
-        effort="high",          # structured extraction benefits from higher effort
+        effort="high",
         output_format=_EXTRACTION_SCHEMA,
     )
     result = await _run_query(
@@ -193,22 +192,21 @@ async def extract_incident(text: str, spacy_hints: dict) -> Optional[dict]:
         timeout=90.0,
     )
     if not result:
-        return None
+        return None, None
 
-    # Prefer SDK structured output; fall back to JSON parsing from text
     if result.structured_output:
-        return result.structured_output
+        return result.structured_output, result.session_id
 
     raw = (result.result or "").strip()
     try:
         start, end = raw.find("{"), raw.rfind("}") + 1
         if start >= 0 and end > start:
-            return json.loads(raw[start:end])
+            return json.loads(raw[start:end]), result.session_id
     except (json.JSONDecodeError, ValueError):
         pass
 
     logger.warning("Extraction returned unparseable output: %s…", raw[:100])
-    return None
+    return None, result.session_id
 
 
 # ── Stage 3: District fallback ────────────────────────────────────────────────
@@ -293,11 +291,10 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
             return None
 
         # ── Stage 1: Triage ──
-        is_relevant = await triage_article(text)
+        is_relevant, triage_session = await triage_article(text)
+        logger.info("Triage session=%s url=%s verdict=%s", triage_session, url, "YES" if is_relevant else "NO")
         if not is_relevant:
-            logger.info("Triage filtered: %s", url)
             return None
-        logger.info("Triage passed: %s", url)
 
         # ── Stage 2: District inference (if spaCy missed it) ──
         spacy_hints = {
@@ -317,14 +314,15 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
                 logger.info("District inferred: %s", inferred)
 
         # ── Stage 3: Extraction ──
-        extracted = await extract_incident(
+        extracted, extract_session = await extract_incident(
             text[: settings.pipeline_max_text_length],
             spacy_hints,
         )
         if not extracted:
-            logger.warning("Extraction failed: %s", url)
+            logger.warning("Extraction failed session=%s url=%s", extract_session, url)
             return None
-        logger.info("Extraction complete: %s", url)
+        logger.info("Extraction complete session=%s url=%s category=%s district=%s",
+                    extract_session, url, extracted.get("category"), extracted.get("district"))
 
         # ── Stage 4: Embed (Ollama) ──
         embedding = None
