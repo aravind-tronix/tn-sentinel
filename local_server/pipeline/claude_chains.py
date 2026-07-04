@@ -112,14 +112,40 @@ _EXTRACTION_SCHEMA = {
     "required": ["title", "district", "category", "summary", "sentiment", "viral_score", "confidence"],
 }
 
+# ── Validator prompt ──────────────────────────────────────────────────────────
+# Run as a separate query() call after extraction (cleaner than sub-agent dispatch
+# because output_format + multi-turn Agent dispatch don't compose reliably).
+
+_VALIDATOR_SYSTEM = f"""You are a Tamil Nadu crime intelligence validator.
+
+You receive the original article and the extracted incident JSON.
+Check each field strictly:
+
+1. district — must be one of the 38 official TN districts in lowercase.
+   Map city/town names to their parent district (e.g. Hosur → krishnagiri, Ooty → nilgiris).
+   Valid districts: {_DISTRICTS}
+2. category — must exactly match the primary crime type from: {_CATEGORIES}
+3. viral_score — calibrate against severity (murder/rape=70+, major theft/narcotics=50-65, minor theft=20-40).
+4. title — must be factual and max 12 words.
+5. summary — must be 2-3 factual sentences, no speculation.
+
+Return ONLY a JSON object — no markdown, no explanation:
+- If all correct: {{"valid": true}}
+- If corrections needed: {{"corrections": {{"field_name": "corrected_value"}}}}"""
+
 # ── SDK helpers ───────────────────────────────────────────────────────────────
 
 def _base_options(**kwargs) -> ClaudeAgentOptions:
-    """Common options — no filesystem tools, project working dir."""
+    """Common options — project working dir, loads tn-crime-analyst skill.
+
+    allowed_tools defaults to [] (no file/bash tools). Callers may override
+    by passing allowed_tools=[...] explicitly.
+    """
+    kwargs.setdefault("allowed_tools", [])
     return ClaudeAgentOptions(
-        allowed_tools=[],          # pure text completion, no file/bash tools
         cwd=_PROJECT_DIR,
-        setting_sources=None,      # don't load any .claude/ config
+        setting_sources=["project"],   # load .claude/skills/tn-crime-analyst.md
+        skills=["tn-crime-analyst"],
         **kwargs,
     )
 
@@ -167,10 +193,42 @@ async def triage_article(text: str) -> tuple[bool, Optional[str]]:
     return ("YES" in answer and "NO" not in answer), result.session_id
 
 
-# ── Stage 2: Extraction ───────────────────────────────────────────────────────
+# ── Stage 2: Extraction + Validation ─────────────────────────────────────────
+
+async def _validate_extraction(article_text: str, extracted: dict) -> Optional[dict]:
+    """Run the validator agent. Returns a corrections dict, or None if valid."""
+    options = _base_options(
+        system_prompt=_VALIDATOR_SYSTEM,
+        max_turns=1,
+        effort="medium",
+    )
+    result = await _run_query(
+        prompt=(
+            f"Article:\n{article_text[:2000]}\n\n"
+            f"Extracted JSON:\n{json.dumps(extracted, indent=2)}"
+        ),
+        options=options,
+        timeout=60.0,
+    )
+    if not result:
+        return None
+    raw = (result.result or "").strip()
+    try:
+        start, end = raw.find("{"), raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            parsed = json.loads(raw[start:end])
+            if parsed.get("valid"):
+                return None
+            return parsed.get("corrections") or None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None
+
 
 async def extract_incident(text: str, spacy_hints: dict) -> tuple[Optional[dict], Optional[str]]:
-    """Return (extracted_dict, session_id)."""
+    """Extract (Claude, effort=high) then validate (Claude, effort=medium).
+    Returns (extracted_dict, session_id).
+    """
     hints_lines = []
     if spacy_hints.get("detected_district"):
         hints_lines.append(f"spaCy detected district: {spacy_hints['detected_district']}")
@@ -180,6 +238,7 @@ async def extract_incident(text: str, spacy_hints: dict) -> tuple[Optional[dict]
         hints_lines.append(f"Named entities: {spacy_hints['entities']}")
     hints_block = ("\n".join(hints_lines) + "\n\n") if hints_lines else ""
 
+    # Step 1: Extract
     options = _base_options(
         system_prompt=_EXTRACTION_SYSTEM,
         max_turns=1,
@@ -194,19 +253,29 @@ async def extract_incident(text: str, spacy_hints: dict) -> tuple[Optional[dict]
     if not result:
         return None, None
 
+    extracted = None
     if result.structured_output:
-        return result.structured_output, result.session_id
+        extracted = result.structured_output
+    else:
+        raw = (result.result or "").strip()
+        try:
+            start, end = raw.find("{"), raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                extracted = json.loads(raw[start:end])
+        except (json.JSONDecodeError, ValueError):
+            pass
 
-    raw = (result.result or "").strip()
-    try:
-        start, end = raw.find("{"), raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end]), result.session_id
-    except (json.JSONDecodeError, ValueError):
-        pass
+    if not extracted:
+        logger.warning("Extraction returned unparseable output: %s…", (result.result or "")[:100])
+        return None, result.session_id
 
-    logger.warning("Extraction returned unparseable output: %s…", raw[:100])
-    return None, result.session_id
+    # Step 2: Validate + apply corrections
+    corrections = await _validate_extraction(text, extracted)
+    if corrections:
+        logger.info("Validator corrected fields: %s", list(corrections.keys()))
+        extracted = {**extracted, **corrections}
+
+    return extracted, result.session_id
 
 
 # ── Stage 3: District fallback ────────────────────────────────────────────────
