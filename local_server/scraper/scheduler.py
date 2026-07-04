@@ -1,6 +1,11 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Callable
+
+from local_server.config import get_settings
+
+_settings = get_settings()
 
 from .registry import SOURCES
 from .extractors.rss_extractor import RSSExtractor
@@ -36,7 +41,24 @@ async def run_source(source: dict) -> dict:
         articles = await extractor.fetch()
         found = len(articles)
 
+        max_age_hours = _settings.scraper_max_age_hours
         for article in articles:
+            # Skip articles older than max_age_hours
+            if article.published_at:
+                try:
+                    pub = article.published_at
+                    if isinstance(pub, str):
+                        from dateparser import parse as dp_parse
+                        pub = dp_parse(pub)
+                    if pub:
+                        pub = pub.replace(tzinfo=timezone.utc) if pub.tzinfo is None else pub.astimezone(timezone.utc)
+                        age_h = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
+                        if age_h > max_age_hours:
+                            filtered += 1
+                            continue
+                except Exception:
+                    pass
+
             if await dedup.is_duplicate(article.url, article.title):
                 filtered += 1
                 continue
