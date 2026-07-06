@@ -1,11 +1,8 @@
 """
 LLM pipeline powered by the Claude Agent SDK.
 
-Replaces Ollama triage + extraction chains with Claude Code running
-programmatically.  Ollama is kept only for embeddings (nomic-embed-text).
-
 Flow per article:
-  preprocess (spaCy) → triage (Claude) → extract (Claude) → embed (Ollama)
+  preprocess (spaCy) → triage (Claude) → extract (Claude)
 """
 
 from __future__ import annotations
@@ -16,8 +13,6 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
-
-from langchain_ollama import OllamaEmbeddings
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -37,14 +32,6 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 _PROJECT_DIR = str(Path(__file__).parent.parent.parent)
-
-# Ollama kept only for embeddings
-embedder = OllamaEmbeddings(
-    model=settings.ollama_embed_model,
-    num_gpu=settings.ollama_num_gpu,
-    base_url=settings.ollama_host,
-    async_client_kwargs={"timeout": 120.0},
-)
 
 # ── Districts list (passed into prompts) ──────────────────────────────────────
 _DISTRICTS = (
@@ -393,17 +380,6 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
         logger.info("Extraction complete session=%s url=%s category=%s district=%s",
                     extract_session, url, extracted.get("category"), extracted.get("district"))
 
-        # ── Stage 4: Embed (Ollama) ──
-        embedding = None
-        embed_text = f"{extracted.get('title', '')} {extracted.get('summary', '')}"
-        try:
-            embedding = await asyncio.wait_for(
-                embedder.aembed_query(embed_text),
-                timeout=120.0,
-            )
-        except Exception as e:
-            logger.warning("Embedding failed: %s", str(e)[:80])
-
         # Resolve district
         district_raw = (extracted.get("district") or "").lower().strip()
         district_final = (
@@ -428,7 +404,7 @@ async def process_article(raw_article: Dict) -> Optional[Dict]:
             "entities":         article.get("entities", {}),
             "detected_district": article.get("detected_district"),
             "detected_category": article.get("detected_category"),
-            "embedding":        embedding,
+            "embedding":        None,
             "published_at":     parse_datetime(article.get("published_at")),
             "scraped_at":       parse_datetime(article.get("scraped_at")),
             "processed_at":     datetime.utcnow(),

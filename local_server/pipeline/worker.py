@@ -1,11 +1,11 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from local_server.config import get_settings
 from local_server.db.models import AsyncSessionLocal, Incident, init_db
@@ -16,28 +16,6 @@ from local_server.api.schemas import IncidentResponse
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-_EMBED_DEDUP_WINDOW_DAYS = 7
-
-
-async def is_embedding_duplicate(embedding: list[float]) -> Optional[str]:
-    """Return the title of a semantically similar recent incident, or None."""
-    threshold = settings.pipeline_dedup_threshold
-    distance = 1.0 - threshold
-    cutoff = datetime.utcnow() - timedelta(days=_EMBED_DEDUP_WINDOW_DAYS)
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            text(
-                "SELECT title FROM incidents "
-                "WHERE published_at >= :cutoff "
-                "AND embedding IS NOT NULL "
-                "AND embedding <=> CAST(:emb AS vector) < :dist "
-                "ORDER BY embedding <=> CAST(:emb AS vector) "
-                "LIMIT 1"
-            ),
-            {"cutoff": cutoff, "emb": str(embedding), "dist": distance},
-        )
-        row = result.first()
-    return row[0] if row else None
 
 async def save_incident(incident_data: dict) -> tuple[Incident, bool]:
     """Save a single processed incident to PostgreSQL if it is not already present."""
@@ -98,17 +76,6 @@ async def process_and_save(raw_article: dict) -> tuple[Optional[Incident], bool]
             process_duration_ms,
         )
         return None, False
-
-    embedding = incident_data.get("embedding")
-    if embedding:
-        dup_title = await is_embedding_duplicate(embedding)
-        if dup_title:
-            logger.info(
-                "Embedding duplicate skipped: %s  (matches: %s)",
-                incident_data.get("url") or incident_data.get("title"),
-                dup_title,
-            )
-            return None, False
 
     save_start = time.perf_counter()
     incident, created = await save_incident(incident_data)
