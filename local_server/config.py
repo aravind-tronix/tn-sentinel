@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     pipeline_dedup_threshold: float = 0.88
     pipeline_max_text_length: int = 3500
 
+    scraper_max_age_hours: int = 48  # skip articles older than this
+
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,https://tn-intel.in,https://www.tn-intel.in,https://main.d2l0lone63w0d6.amplifyapp.com,https://d2l0lone63w0d6.amplifyapp.com"
 
     # NewsAPI — leave blank to disable (get key at newsapi.org)

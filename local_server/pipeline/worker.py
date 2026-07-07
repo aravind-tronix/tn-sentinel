@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -8,12 +9,13 @@ from sqlalchemy import select
 
 from local_server.config import get_settings
 from local_server.db.models import AsyncSessionLocal, Incident, init_db
-from local_server.pipeline.llm_chains import process_article
+from local_server.pipeline.claude_chains import process_article
 from local_server.aws.dynamo import save_incident_to_dynamo, broadcast_to_ws
 from local_server.api.schemas import IncidentResponse
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
 
 async def save_incident(incident_data: dict) -> tuple[Incident, bool]:
     """Save a single processed incident to PostgreSQL if it is not already present."""

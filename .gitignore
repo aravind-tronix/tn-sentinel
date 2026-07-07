@@ -28,7 +28,8 @@ logss.txt
 # OS
 .DS_Store
 Thumbs.db
-.claude
+.claude/*
+!.claude/skills/
 
 # Runtime / generated
 scripts/gdelt_progress.json
