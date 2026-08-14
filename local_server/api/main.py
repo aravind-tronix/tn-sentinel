@@ -156,10 +156,11 @@ async def list_incidents(
         count_stmt = count_stmt.where(f)
         data_stmt = data_stmt.where(f)
 
-    total_result, rows = await asyncio.gather(
-        db.execute(count_stmt),
-        db.execute(data_stmt.order_by(Incident.published_at.desc().nullslast()).offset(offset).limit(limit)),
-    )
+    # SQLAlchemy AsyncSession does not permit concurrent operations on the same
+    # session. Keep these sequential; otherwise /incidents can 500 with
+    # "session is provisioning a new connection" under asyncpg.
+    total_result = await db.execute(count_stmt)
+    rows = await db.execute(data_stmt.order_by(Incident.published_at.desc().nullslast()).offset(offset).limit(limit))
     total = total_result.scalar() or 0
     incidents = [IncidentResponse.from_orm(row) for row in rows.scalars().all()]
     return IncidentListResponse(incidents=incidents, total=total)
@@ -184,15 +185,17 @@ async def get_kpis(db: AsyncSession = Depends(get_db)) -> KPIStats:
     def _where_cur(stmt):  return stmt.where(Incident.published_at >= window_cur)
     def _where_prev(stmt): return stmt.where(Incident.published_at.between(window_prev, window_cur))
 
-    results = await asyncio.gather(
-        db.execute(_where_cur(select(func.count()))),
-        db.execute(_where_cur(select(func.coalesce(func.avg(Incident.viral_score), 0.0)))),
-        db.execute(_where_cur(select(func.count(func.distinct(Incident.source_id))))),
-        db.execute(_where_cur(select(func.count()).where(Incident.viral_score >= 80))),
-        db.execute(_where_cur(select(func.count()).where(Incident.viral_score >= 90))),
-        db.execute(_where_prev(select(func.count()))),
-        db.execute(_where_prev(select(func.coalesce(func.avg(Incident.viral_score), 0.0)))),
-    )
+    results = []
+    for stmt in (
+        _where_cur(select(func.count())),
+        _where_cur(select(func.coalesce(func.avg(Incident.viral_score), 0.0))),
+        _where_cur(select(func.count(func.distinct(Incident.source_id)))),
+        _where_cur(select(func.count()).where(Incident.viral_score >= 80)),
+        _where_cur(select(func.count()).where(Incident.viral_score >= 90)),
+        _where_prev(select(func.count())),
+        _where_prev(select(func.coalesce(func.avg(Incident.viral_score), 0.0))),
+    ):
+        results.append(await db.execute(stmt))
 
     events_24h        = int(results[0].scalar_one())
     avg_viral_score   = float(results[1].scalar_one() or 0.0)
@@ -263,16 +266,17 @@ async def get_timeline(
     db: AsyncSession = Depends(get_db),
 ):
     since = datetime.utcnow() - timedelta(days=days)
+    day_expr = func.date_trunc("day", Incident.published_at).label("day")
     if breakdown:
         stmt = (
             select(
-                func.date_trunc("day", Incident.published_at).label("day"),
+                day_expr,
                 Incident.category,
                 func.count().label("count"),
             )
             .where(Incident.published_at >= since)
-            .group_by(func.date_trunc("day", Incident.published_at), Incident.category)
-            .order_by(func.date_trunc("day", Incident.published_at))
+            .group_by(day_expr, Incident.category)
+            .order_by(day_expr)
         )
         rows = await db.execute(stmt)
         return [
@@ -282,12 +286,12 @@ async def get_timeline(
         ]
     stmt = (
         select(
-            func.date_trunc("day", Incident.published_at).label("day"),
+            day_expr,
             func.count().label("count"),
         )
         .where(Incident.published_at >= since)
-        .group_by(func.date_trunc("day", Incident.published_at))
-        .order_by(func.date_trunc("day", Incident.published_at))
+        .group_by(day_expr)
+        .order_by(day_expr)
     )
     rows = await db.execute(stmt)
     return [
@@ -325,10 +329,9 @@ async def get_source_stats(db: AsyncSession = Depends(get_db)):
 @app.get("/stats/viral-distribution")
 async def get_viral_distribution(db: AsyncSession = Depends(get_db)):
     buckets = [(0, 20, "Low"), (20, 40, "Moderate"), (40, 60, "High"), (60, 80, "Critical"), (80, 101, "Viral")]
-    results = await asyncio.gather(*[
-        db.execute(select(func.count()).where(Incident.viral_score >= lo, Incident.viral_score < hi))
-        for lo, hi, _ in buckets
-    ])
+    results = []
+    for lo, hi, _ in buckets:
+        results.append(await db.execute(select(func.count()).where(Incident.viral_score >= lo, Incident.viral_score < hi)))
     return [
         {"bucket": label, "lo": lo, "count": int(r.scalar_one())}
         for (lo, hi, label), r in zip(buckets, results)

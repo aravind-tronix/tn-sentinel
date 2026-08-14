@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     ollama_num_thread: int = 6
     ollama_temperature: float = 0.0
 
+    # OpenAI — required for the local LLM pipeline when Claude subscription is unavailable.
+    # ChatGPT Plus/Pro subscriptions do not automatically provide API access; set OPENAI_API_KEY.
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+    openai_temperature: float = 0.0
+
     event_broadcaster_url: str = "http://localhost:8000"
 
     pipeline_dedup_threshold: float = 0.88
